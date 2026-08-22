@@ -7,6 +7,21 @@ const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL ?? "https://api.minimax.ch
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY ?? "";
 const TEXT_MODEL = process.env.MINIMAX_TEXT_MODEL ?? "MiniMax-Text-01";
 
+/**
+ * Sanity check at module load: warn (but don't crash) when the API key
+ * looks missing or malformed. Helps surface config errors during smoke
+ * tests instead of failing silently later.
+ */
+if (!MINIMAX_API_KEY) {
+  console.warn(
+    "[MiniMax] MINIMAX_API_KEY is not set — AI features will return mocks",
+  );
+} else if (MINIMAX_API_KEY.length < 20) {
+  console.warn(
+    `[MiniMax] MINIMAX_API_KEY looks too short (${MINIMAX_API_KEY.length} chars). Did you truncate it?`,
+  );
+}
+
 interface ChatMessage {
   role: "system" | "user" | "assistant";
   content:
@@ -78,7 +93,33 @@ export async function minimaxChat(
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`MiniMax API error ${res.status}: ${text}`);
+    // Parse the error to give a clearer message for the common case of
+    // invalid/expired API keys (avoids dumping raw provider JSON to users).
+    let friendly = `MiniMax API error ${res.status}`;
+    try {
+      const parsed = JSON.parse(text) as {
+        error?: {
+          type?: string;
+          message?: string;
+        };
+      };
+      const errType = parsed.error?.type;
+      const errMsg = parsed.error?.message;
+      if (res.status === 401 || errType === "authorized_error") {
+        friendly = `MiniMax API key inválida o revocada. Revisá MINIMAX_API_KEY en Vercel env vars.`;
+      } else if (res.status === 429 || errType === "rate_limit") {
+        friendly = `MiniMax rate limit alcanzado. Probá en unos minutos.`;
+      } else if (errMsg) {
+        friendly = `MiniMax API error ${res.status}: ${errMsg}`;
+      }
+    } catch {
+      // Body wasn't JSON; fall through to raw text
+    }
+    // Don't log the full text — it could include the API key in some
+    // error formats. Sanitize just in case.
+    const sanitized = text.length > 500 ? text.slice(0, 500) + "…" : text;
+    console.error(`[MiniMax] ${res.status}: ${sanitized}`);
+    throw new Error(friendly);
   }
 
   const data = (await res.json()) as ChatResponse;
