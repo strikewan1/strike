@@ -107,133 +107,189 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
     await processImage(dataUrl);
   };
 
+  // Helper: request a signed upload URL for a specific path.
+  // Defined before processImage so it's available when called.
+  const requestSignedUrl = async (
+    fileName: string,
+    contentType: string,
+    blobForMagicBytes: Blob,
+  ): Promise<{ signedUrl: string; path: string; publicUrl: string }> => {
+    const headerBuf = await blobForMagicBytes.slice(0, 16).arrayBuffer();
+    const headerBytes = new Uint8Array(headerBuf);
+    const headerHex = Array.from(headerBytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    console.log(
+      "[upload] POST /api/upload/sign fileName=", fileName,
+      "contentType=", contentType, "headerHex=", headerHex.slice(0, 16) + "...",
+    );
+    let r: Response;
+    try {
+      r = await fetch("/api/upload/sign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bucket: "garments",
+          fileName,
+          contentType,
+          headerHex,
+        }),
+        cache: "no-store", // critical: don't let SW serve a stale response
+      });
+    } catch (networkErr) {
+      console.error("[upload] /api/upload/sign network error:", networkErr);
+      throw new Error(
+        `Network error contacting server: ${networkErr instanceof Error ? networkErr.message : "unknown"}`,
+      );
+    }
+    if (!r.ok) {
+      const errBody = await r.json().catch(() => ({}));
+      throw new Error(errBody.error ?? `Sign URL failed: HTTP ${r.status}`);
+    }
+    return r.json();
+  };
+
+  // Helper: PUT a blob to a signed URL.
+  const putToSignedUrl = async (
+    signedUrl: string,
+    blob: Blob,
+  ): Promise<void> => {
+    console.log(
+      "[upload] PUT signedUrl size=", blob.size,
+      "type=", blob.type,
+      "urlHost=", new URL(signedUrl).host,
+    );
+    let r: Response;
+    try {
+      r = await fetch(signedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": blob.type },
+        body: blob,
+        cache: "no-store",
+      });
+    } catch (networkErr) {
+      console.error("[upload] PUT network error:", networkErr);
+      throw new Error(
+        `Network error uploading: ${networkErr instanceof Error ? networkErr.message : "unknown"}`,
+      );
+    }
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      throw new Error(`Upload failed: HTTP ${r.status} ${text.slice(0, 200)}`);
+    }
+  };
+
   const processImage = async (dataUrl: string) => {
     try {
+      // ─── Step 1: Parse input ────────────────────────────────────────
       setStatus("processing");
-
-      // Extract the MIME type from the data URL prefix BEFORE we lose it.
-      // The browser will return `text/plain` if we strip the prefix and
-      // re-fetch as raw base64, so we have to capture the type up-front.
       const mimeMatch = dataUrl.match(/^data:([^;]+);/);
       const inputMime = mimeMatch?.[1] || "image/jpeg";
+      console.log("[upload] step=parse mime=", inputMime, "dataUrlLen=", dataUrl.length);
 
-      // Fetch the data URL directly (the browser respects the MIME prefix).
+      // ─── Step 2: Build the original blob with explicit MIME ─────────
       const response = await fetch(dataUrl);
       const originalBytes = await response.arrayBuffer();
-
-      // Force the blob type to match the actual content. Some browsers
-      // set .type to "" or text/plain for data URLs without an explicit
-      // Content-Type header; we know the truth from the prefix.
       const originalBlob = new Blob([originalBytes], { type: inputMime });
+      console.log("[upload] step=originalBlob size=", originalBlob.size, "type=", originalBlob.type);
 
-      // Background removal (best-effort: if it fails, use original)
+      // ─── Step 3: Background removal (best-effort) ───────────────────
       let cleanedBlob: Blob = originalBlob;
       try {
         cleanedBlob = await removeBackgroundFromBlob(originalBlob);
+        console.log("[upload] step=bg-removal size=", cleanedBlob.size, "type=", cleanedBlob.type);
       } catch (bgErr) {
-        console.warn("BG removal failed, using original:", bgErr);
+        console.warn("[upload] step=bg-removal FAILED, using original:", bgErr);
       }
-
-      // bg-removal may or may not set the output blob's type. Force it to
-      // PNG (the library's documented default output format).
+      // Force PNG type for cleaned blob (library's documented default)
       if (!cleanedBlob.type || cleanedBlob.type === "text/plain") {
         cleanedBlob = new Blob([await cleanedBlob.arrayBuffer()], {
           type: "image/png",
         });
+        console.log("[upload] step=bg-removal type-forced to image/png");
       }
 
       const cleanedDataUrl = await blobToDataUrl(cleanedBlob);
 
       setStatus("uploading");
 
-      // Helper: request a signed upload URL for a specific path
-      const requestSignedUrl = async (
-        fileName: string,
-        contentType: string,
-        blobForMagicBytes: Blob,
-      ): Promise<{ signedUrl: string; path: string; publicUrl: string }> => {
-        const headerBuf = await blobForMagicBytes.slice(0, 16).arrayBuffer();
-        const headerBytes = new Uint8Array(headerBuf);
-        const headerHex = Array.from(headerBytes)
-          .map((b) => b.toString(16).padStart(2, "0"))
-          .join("");
+      // ─── Step 4: Upload ORIGINAL via signed URL ────────────────────
+      const origType = originalBlob.type || inputMime;
+      console.log("[upload] step=sign-url-original mime=", origType);
 
-        const r = await fetch("/api/upload/sign", {
+      let originalUrl: string;
+      try {
+        const origSigned = await requestSignedUrl(
+          "capture.jpg",
+          origType,
+          originalBlob,
+        );
+        console.log("[upload] step=sign-url-original OK path=", origSigned.path);
+        await putToSignedUrl(origSigned.signedUrl, originalBlob);
+        originalUrl = origSigned.publicUrl;
+        console.log("[upload] step=put-original OK url=", originalUrl);
+      } catch (err) {
+        console.error("[upload] step=upload-original FAILED:", err);
+        const msg =
+          err instanceof Error ? err.message : "Error subiendo original";
+        throw new Error(
+          `Subiendo imagen original: ${msg}. ` +
+            `Si ves "Load failed" en DevTools, probablemente sea el Service ` +
+            `Worker cacheado. Limpiá la cache del sitio (DevTools > Application > ` +
+            `Storage > Clear site data) y recargá.`,
+        );
+      }
+
+      // ─── Step 5: Upload CLEANED via signed URL ─────────────────────
+      const cleanType = cleanedBlob.type || "image/png";
+      console.log("[upload] step=sign-url-cleaned mime=", cleanType);
+
+      let cleanedUrl: string;
+      try {
+        const cleanSigned = await requestSignedUrl(
+          "capture-cleaned.jpg",
+          cleanType,
+          cleanedBlob,
+        );
+        console.log("[upload] step=sign-url-cleaned OK path=", cleanSigned.path);
+        await putToSignedUrl(cleanSigned.signedUrl, cleanedBlob);
+        cleanedUrl = cleanSigned.publicUrl;
+        console.log("[upload] step=put-cleaned OK url=", cleanedUrl);
+      } catch (err) {
+        console.error("[upload] step=upload-cleaned FAILED:", err);
+        throw new Error(
+          `Subiendo imagen procesada: ${err instanceof Error ? err.message : "Error"}`,
+        );
+      }
+
+      // ─── Step 6: AI recognition ────────────────────────────────────
+      setStatus("recognizing");
+      console.log("[upload] step=ai-recognize sending dataUrl len=", cleanedDataUrl.length);
+      let ai: unknown;
+      try {
+        const aiRes = await fetch("/api/ai/recognize-garment", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            bucket: "garments",
-            fileName,
-            contentType,
-            headerHex,
-          }),
+          body: JSON.stringify({ image: cleanedDataUrl }),
+          cache: "no-store",
         });
-        if (!r.ok) {
-          const errBody = await r.json().catch(() => ({}));
-          throw new Error(errBody.error ?? `Sign URL failed for ${fileName}`);
+        if (!aiRes.ok) {
+          const errBody = await aiRes.json().catch(() => ({}));
+          throw new Error(errBody.error ?? `AI HTTP ${aiRes.status}`);
         }
-        return r.json();
-      };
-
-      // Helper: PUT a blob to a signed URL
-      const putToSignedUrl = async (
-        signedUrl: string,
-        blob: Blob,
-      ): Promise<void> => {
-        const r = await fetch(signedUrl, {
-          method: "PUT",
-          headers: { "Content-Type": blob.type },
-          body: blob,
-        });
-        if (!r.ok) {
-          const text = await r.text().catch(() => "");
-          throw new Error(`PUT failed (${r.status}): ${text.slice(0, 200)}`);
-        }
-      };
-
-      // Upload ORIGINAL first (it has the original framing)
-      // Both blobs now have correct types set above, but defensively fall
-      // back to a valid image MIME if for some reason they don't.
-      const origType =
-        originalBlob.type && originalBlob.type !== "text/plain"
-          ? originalBlob.type
-          : inputMime || "image/jpeg";
-      const origSigned = await requestSignedUrl(
-        "capture.jpg",
-        origType,
-        originalBlob,
-      );
-      await putToSignedUrl(origSigned.signedUrl, originalBlob);
-      const originalUrl = origSigned.publicUrl;
-
-      // Upload CLEANED second (background-removed version)
-      const cleanType =
-        cleanedBlob.type && cleanedBlob.type !== "text/plain"
-          ? cleanedBlob.type
-          : "image/png";
-      const cleanSigned = await requestSignedUrl(
-        "capture-cleaned.jpg",
-        cleanType,
-        cleanedBlob,
-      );
-      await putToSignedUrl(cleanSigned.signedUrl, cleanedBlob);
-      const cleanedUrl = cleanSigned.publicUrl;
-
-      setStatus("recognizing");
-      const aiRes = await fetch("/api/ai/recognize-garment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: cleanedDataUrl }),
-      });
-      if (!aiRes.ok) {
-        const errBody = await aiRes.json().catch(() => ({}));
-        throw new Error(errBody.error ?? "AI recognition failed");
+        ai = await aiRes.json();
+        console.log("[upload] step=ai-recognize OK category=", (ai as { category?: string })?.category);
+      } catch (err) {
+        console.error("[upload] step=ai-recognize FAILED:", err);
+        throw new Error(
+          `Reconocimiento IA: ${err instanceof Error ? err.message : "Error"}`,
+        );
       }
-      const ai = await aiRes.json();
 
       setStatus("ready");
 
-      // Navigate to confirm step with state in session storage
+      // ─── Step 7: Persist to confirm-step ───────────────────────────
       sessionStorage.setItem(
         "strike:pending-garment",
         JSON.stringify({
@@ -244,7 +300,7 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
       );
       router.push("/add/confirm");
     } catch (err) {
-      console.error(err);
+      console.error("[upload] FINAL ERROR:", err);
       setError(err instanceof Error ? err.message : "Error procesando la imagen");
       setStatus("error");
     }
