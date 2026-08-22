@@ -126,53 +126,70 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
 
       setStatus("uploading");
 
-      // Read first 16 bytes as hex for magic-byte verification server-side
-      const headerBuf = await cleanedBlob.slice(0, 16).arrayBuffer();
-      const headerBytes = new Uint8Array(headerBuf);
-      const headerHex = Array.from(headerBytes)
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
+      // Helper: request a signed upload URL for a specific path
+      const requestSignedUrl = async (
+        fileName: string,
+        contentType: string,
+        blobForMagicBytes: Blob,
+      ): Promise<{ signedUrl: string; path: string; publicUrl: string }> => {
+        const headerBuf = await blobForMagicBytes.slice(0, 16).arrayBuffer();
+        const headerBytes = new Uint8Array(headerBuf);
+        const headerHex = Array.from(headerBytes)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
 
-      const uploadRes = await fetch("/api/upload/sign", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bucket: "garments",
-          fileName: "capture.jpg",
-          contentType: cleanedBlob.type || "image/jpeg",
-          headerHex,
-        }),
-      });
-      if (!uploadRes.ok) {
-        const errBody = await uploadRes.json().catch(() => ({}));
-        throw new Error(errBody.error ?? "Upload sign failed");
-      }
-      const { signedUrl, path, publicUrl } = await uploadRes.json();
+        const r = await fetch("/api/upload/sign", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bucket: "garments",
+            fileName,
+            contentType,
+            headerHex,
+          }),
+        });
+        if (!r.ok) {
+          const errBody = await r.json().catch(() => ({}));
+          throw new Error(errBody.error ?? `Sign URL failed for ${fileName}`);
+        }
+        return r.json();
+      };
 
-      // Upload both original and cleaned
-      const uploadFile = async (
-        dataUrlToUpload: string,
-        suffix: string,
-      ): Promise<string> => {
-        const blob = await (await fetch(dataUrlToUpload)).blob();
-        const url = signedUrl.replace(
-          path,
-          path.replace(/\.[^.]+$/, `-${suffix}$&`),
-        );
-        const r = await fetch(url, {
+      // Helper: PUT a blob to a signed URL
+      const putToSignedUrl = async (
+        signedUrl: string,
+        blob: Blob,
+      ): Promise<void> => {
+        const r = await fetch(signedUrl, {
           method: "PUT",
           headers: { "Content-Type": blob.type },
           body: blob,
         });
-        if (!r.ok) throw new Error(`Upload ${suffix} failed`);
-        return publicUrl.replace(
-          path,
-          path.replace(/\.[^.]+$/, `-${suffix}$&`),
-        );
+        if (!r.ok) {
+          const text = await r.text().catch(() => "");
+          throw new Error(`PUT failed (${r.status}): ${text.slice(0, 200)}`);
+        }
       };
 
-      const originalUrl = await uploadFile(dataUrl, "original");
-      const cleanedUrl = await uploadFile(cleanedDataUrl, "cleaned");
+      // Upload ORIGINAL first (it has the original framing)
+      const origType = originalBlob.type || "image/jpeg";
+      const origSigned = await requestSignedUrl(
+        "capture.jpg",
+        origType,
+        originalBlob,
+      );
+      await putToSignedUrl(origSigned.signedUrl, originalBlob);
+      const originalUrl = origSigned.publicUrl;
+
+      // Upload CLEANED second (background-removed version)
+      const cleanType = cleanedBlob.type || "image/jpeg";
+      const cleanSigned = await requestSignedUrl(
+        "capture-cleaned.jpg",
+        cleanType,
+        cleanedBlob,
+      );
+      await putToSignedUrl(cleanSigned.signedUrl, cleanedBlob);
+      const cleanedUrl = cleanSigned.publicUrl;
 
       setStatus("recognizing");
       const aiRes = await fetch("/api/ai/recognize-garment", {
