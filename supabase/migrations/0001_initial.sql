@@ -310,23 +310,37 @@ CREATE TRIGGER set_wishlist_updated_at
 -- =====================================================
 -- PROFILE AUTO-CREATE on signup
 -- =====================================================
+-- Note: `SET search_path = public, pg_temp` is REQUIRED so that INSERT
+-- statements resolve to the `public` schema when the trigger fires from
+-- `auth.users`. Without this, Supabase's restricted search_path causes
+-- "relation profiles does not exist" because the function looks in the
+-- `auth` schema first.
+-- Also: all table references are schema-qualified (`public.profiles`) as
+-- belt-and-suspenders for the same reason.
 
-CREATE OR REPLACE FUNCTION handle_new_user()
-RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 BEGIN
-  INSERT INTO profiles (id, display_name)
+  INSERT INTO public.profiles (id, display_name)
   VALUES (
     NEW.id,
     COALESCE(NEW.raw_user_meta_data->>'display_name', split_part(NEW.email, '@', 1))
   );
-  INSERT INTO style_preferences (user_id) VALUES (NEW.id);
+  INSERT INTO public.style_preferences (user_id) VALUES (NEW.id);
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
+
+-- Explicit ownership ensures bypass-RLS when inserting into profiles.
+ALTER FUNCTION public.handle_new_user() OWNER TO postgres;
 
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION handle_new_user();
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 -- =====================================================
 -- ROW LEVEL SECURITY
@@ -386,6 +400,18 @@ CREATE POLICY "own_wishlist" ON wishlist_items FOR ALL
 
 -- ai_cache is server-managed; no client policies (RLS off)
 ALTER TABLE ai_cache DISABLE ROW LEVEL SECURITY;
+
+-- =====================================================
+-- GRANTS — supabase_auth_admin needs schema/table/function access
+-- to execute triggers and insert into public.* tables during auth flows.
+-- Without these, the handle_new_user trigger fails with
+-- "permission denied for table profiles".
+-- =====================================================
+
+GRANT USAGE ON SCHEMA public TO supabase_auth_admin;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO supabase_auth_admin;
+GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO supabase_auth_admin;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO supabase_auth_admin;
 
 -- =====================================================
 -- STORAGE BUCKETS
