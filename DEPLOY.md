@@ -89,21 +89,27 @@ Deberías ver: `body-photos`, `fit-checks`, `garments`, `references`.
 
 ---
 
-## Paso 3 — Configurar MiniMax (2 min)
+## Paso 3 — Configurar Google AI Studio (Gemini) (2 min)
 
 Si todavía no tenés key:
 
-1. Creá cuenta en MiniMax
-2. Dashboard → API Keys → **Create new key**
-3. Copiala
+1. Andá a https://aistudio.google.com/app/apikey
+2. Click **"Create API key"** → elegí (o creá) un proyecto
+3. 📋 Copiala — empieza con `AIza...` y suele tener ~39 caracteres
+4. Free tier: **Gemini 2.0 Flash** = 15 RPM, 1500 RPD gratis (más que suficiente para MVP)
 
-El endpoint base y modelo default ya están en `.env.example`. Si tu plan usa otro modelo, ajustá:
+Los defaults de `.env.example` ya están bien. Si querés cambiar modelo:
 
 ```bash
-MINIMAX_BASE_URL=https://api.minimax.chat/v1
-MINIMAX_VISION_MODEL=MiniMax-Text-01
-MINIMAX_TEXT_MODEL=MiniMax-Text-01
+GOOGLE_AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+GOOGLE_AI_VISION_MODEL=gemini-2.0-flash
+GOOGLE_AI_TEXT_MODEL=gemini-2.0-flash
 ```
+
+Otras opciones de modelo (todos free tier):
+- `gemini-2.0-flash` (rápido, default — recomendado)
+- `gemini-2.5-flash` (mejor calidad, similar velocidad)
+- `gemini-2.5-pro` (mejor razonamiento, más lento, rate-limited)
 
 ---
 
@@ -137,10 +143,10 @@ Settings → Environment Variables → agregar las siguientes:
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://xxx.supabase.co` | Production, Preview |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `eyJ...` | Production, Preview |
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...` | Production only ⚠️ |
-| `MINIMAX_API_KEY` | `ey...` | Production, Preview |
-| `MINIMAX_BASE_URL` | `https://api.minimax.chat/v1` | Production, Preview |
-| `MINIMAX_VISION_MODEL` | `MiniMax-Text-01` | Production, Preview |
-| `MINIMAX_TEXT_MODEL` | `MiniMax-Text-01` | Production, Preview |
+| `GOOGLE_AI_API_KEY` | `AIza...` | Production, Preview |
+| `GOOGLE_AI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | Production, Preview |
+| `GOOGLE_AI_VISION_MODEL` | `gemini-2.0-flash` | Production, Preview |
+| `GOOGLE_AI_TEXT_MODEL` | `gemini-2.0-flash` | Production, Preview |
 | `NEXT_PUBLIC_APP_URL` | `https://strike-tu-usuario.vercel.app` | Production |
 
 **Opcionales para producción real**:
@@ -227,11 +233,18 @@ npm run build
 ### CSP errors en consola del browser
 Los headers CSP son estrictos. Si ves errores tipo "Refused to connect to X", agregá el dominio en `next.config.ts` (función `headers()`).
 
-### MiniMax 401/403
-Verificá que `MINIMAX_API_KEY` esté bien copiada en Vercel. Probá el endpoint directamente:
+### Google AI 401/403/429
+Verificá que `GOOGLE_AI_API_KEY` esté bien copiada en Vercel. Debe empezar con `AIza`. Probá el endpoint directamente:
 ```bash
-curl -H "Authorization: Bearer $MINIMAX_API_KEY" https://api.minimax.chat/v1/models
+KEY="AIza-tu-key-aqui"
+curl -X POST "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini-2.0-flash","messages":[{"role":"user","content":"say ok"}],"max_tokens":10}'
 ```
+- ✅ Si devuelve `"ok"` en el contenido → key válida
+- ❌ Si devuelve 401 → key inválida (regenerala en aistudio.google.com/app/apikey)
+- ❌ Si devuelve 429 → rate limit alcanzado (esperá unos minutos o upgradeá a plan pago)
 
 ### Storage upload falla con 403
 Las políticas RLS están bien seteadas en `0002_storage_buckets.sql`. Verificá que las migraciones se corrieron todas.

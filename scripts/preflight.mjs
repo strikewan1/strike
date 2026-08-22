@@ -99,6 +99,7 @@ const hasSupabaseUrl = envVars["NEXT_PUBLIC_SUPABASE_URL"]?.startsWith(
 );
 const hasAnonKey =
   envVars["NEXT_PUBLIC_SUPABASE_ANON_KEY"]?.startsWith("eyJ");
+const hasGoogleKey = envVars["GOOGLE_AI_API_KEY"]?.startsWith("AIza");
 
 const required = [
   { key: "NEXT_PUBLIC_SUPABASE_URL", check: hasSupabaseUrl },
@@ -108,7 +109,7 @@ const required = [
 
 const recommended = [
   "SUPABASE_SERVICE_ROLE_KEY",
-  "MINIMAX_API_KEY",
+  "GOOGLE_AI_API_KEY",
 ];
 
 for (const { key, check } of required) {
@@ -117,6 +118,10 @@ for (const { key, check } of required) {
   } else {
     fail(`${key} no configurada o con formato inválido (requerida para producción)`);
   }
+}
+
+if (hasGoogleKey) {
+  pass("GOOGLE_AI_API_KEY con formato válido (AIza...)");
 }
 
 for (const key of recommended) {

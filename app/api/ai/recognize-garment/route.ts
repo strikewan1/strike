@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
-import { minimaxChat, parseJsonSafe, bufferHash } from "@/lib/ai/minimax";
+import { googleAIChat, parseJsonSafe, bufferHash } from "@/lib/ai/google-ai";
 import { RECOGNIZE_GARMENT_PROMPT } from "@/lib/ai/prompts";
 import { RecognizedGarmentSchema } from "@/lib/ai/schemas";
 import { checkRateLimit, LIMITS, rateLimitResponse } from "@/lib/rate-limit";
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Call MiniMax
-    const raw = await minimaxChat(RECOGNIZE_GARMENT_PROMPT(image), {
+    const raw = await googleAIChat(RECOGNIZE_GARMENT_PROMPT(image), {
       jsonMode: true,
       maxTokens: 800,
     });
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
     await supabase.from("ai_cache").insert({
       image_hash: hash,
       response: result,
-      model: process.env.MINIMAX_VISION_MODEL ?? "minimax",
+      model: process.env.GOOGLE_AI_VISION_MODEL ?? "gemini-2.0-flash",
     });
 
     return NextResponse.json(result);

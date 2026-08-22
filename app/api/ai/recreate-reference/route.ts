@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
-import { minimaxChat, parseJsonSafe } from "@/lib/ai/minimax";
+import { googleAIChat, parseJsonSafe } from "@/lib/ai/google-ai";
 import { OUTFIT_SYSTEM_PROMPT } from "@/lib/ai/prompts";
 import { OutfitResponseSchema, type OutfitResponse } from "@/lib/ai/schemas";
 import { summarizeForLLM, type ClosetItem } from "@/lib/outfit-engine/rules";
@@ -193,7 +193,7 @@ Missing pieces (not in closet): ${JSON.stringify(missing.map((m) => m.reference_
 
 Build 1-2 outfit suggestions using ONLY the user's closet, prioritizing the matched pieces above. Use garments that complement the reference's color and silhouette logic. Each outfit needs at minimum a top, bottom, and footwear.`;
       try {
-        const raw = await minimaxChat(
+        const raw = await googleAIChat(
           [
             { role: "system", content: OUTFIT_SYSTEM_PROMPT },
             { role: "user", content: userPrompt },

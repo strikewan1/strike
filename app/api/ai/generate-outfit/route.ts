@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
-import { minimaxChat, parseJsonSafe } from "@/lib/ai/minimax";
+import { googleAIChat, parseJsonSafe } from "@/lib/ai/google-ai";
 import { OUTFIT_SYSTEM_PROMPT, buildOutfitUserPrompt } from "@/lib/ai/prompts";
 import { OutfitResponseSchema } from "@/lib/ai/schemas";
 import { summarizeForLLM } from "@/lib/outfit-engine/rules";
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
       styleMemory,
     });
 
-    const raw = await minimaxChat(
+    const raw = await googleAIChat(
       [
         { role: "system", content: OUTFIT_SYSTEM_PROMPT },
         { role: "user", content: userPrompt },

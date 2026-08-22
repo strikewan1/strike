@@ -39,11 +39,11 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...   # server-only, nunca exponer
 
-# MiniMax
-MINIMAX_API_KEY=...
-MINIMAX_BASE_URL=https://api.minimax.chat/v1
-MINIMAX_VISION_MODEL=MiniMax-Text-01
-MINIMAX_TEXT_MODEL=MiniMax-Text-01
+# Google AI Studio (Gemini) — gets key from https://aistudio.google.com/app/apikey
+GOOGLE_AI_API_KEY=AIza...   # empieza con AIza
+GOOGLE_AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+GOOGLE_AI_VISION_MODEL=gemini-2.0-flash
+GOOGLE_AI_TEXT_MODEL=gemini-2.0-flash
 ```
 
 Sin Supabase configurado, la app entra en **modo preview**: muestra la UI pero el auth está deshabilitado.
@@ -89,7 +89,7 @@ app/
     └── upload/sign
 
 lib/
-├── ai/{minimax,prompts,schemas}.ts       # AI client + Zod schemas
+├── ai/{google-ai,prompts,schemas}.ts    # Google AI client + Zod schemas
 ├── outfit-engine/rules.ts                # Local scoring rules
 ├── background-removal.ts                 # On-device (imgly)
 └── supabase/{client,server,types}.ts

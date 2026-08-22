@@ -29,11 +29,11 @@ export async function GET() {
   });
 
   checks.push({
-    name: "minimax_configured",
-    status: process.env.MINIMAX_API_KEY ? "ok" : "warn",
-    message: process.env.MINIMAX_API_KEY
-      ? "MiniMax API key present"
-      : "MiniMax not configured (mocks will be returned)",
+    name: "google_ai_configured",
+    status: process.env.GOOGLE_AI_API_KEY ? "ok" : "warn",
+    message: process.env.GOOGLE_AI_API_KEY
+      ? "Google AI API key present"
+      : "Google AI not configured (mocks will be returned)",
   });
 
   checks.push({

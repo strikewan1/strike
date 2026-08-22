@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
-import { minimaxChat, parseJsonSafe } from "@/lib/ai/minimax";
+import { googleAIChat, parseJsonSafe } from "@/lib/ai/google-ai";
 import { ANALYZE_REFERENCE_PROMPT } from "@/lib/ai/prompts";
 import { ReferenceAnalysisSchema } from "@/lib/ai/schemas";
 import { checkRateLimit, LIMITS, rateLimitResponse } from "@/lib/rate-limit";
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid body" }, { status: 400 });
     }
 
-    const raw = await minimaxChat(ANALYZE_REFERENCE_PROMPT(parsed.data.image), {
+    const raw = await googleAIChat(ANALYZE_REFERENCE_PROMPT(parsed.data.image), {
       jsonMode: true,
       maxTokens: 1200,
     });
