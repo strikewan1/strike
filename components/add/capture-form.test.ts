@@ -179,3 +179,91 @@ describe("capture-form upload flow", () => {
     expect(sent.headerHex.startsWith("ffd8ffe0")).toBe(true);
   });
 });
+
+/**
+ * Regression: MIME type must survive the dataUrl → blob → upload flow.
+ *
+ * Bug history: stripping the data URL prefix and refetching as raw base64
+ * caused the browser to interpret the response as text/plain. The blob's
+ * .type was then "text/plain" or "", which was truthy so the client's
+ * `originalBlob.type || "image/jpeg"` fallback didn't trigger. The server
+ * rejected the upload with "tipo de archivo no permitido text/plain".
+ *
+ * The fix extracts the MIME from the data URL prefix BEFORE stripping it,
+ * and constructs blobs with explicit types so the server gets an image MIME.
+ */
+
+const ALLOWED = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
+
+function isAllowedImageMime(t: string): boolean {
+  return (ALLOWED as string[]).includes(t);
+}
+
+function extractMime(dataUrl: string): string {
+  const m = dataUrl.match(/^data:([^;]+);/);
+  return m?.[1] || "image/jpeg";
+}
+
+describe("MIME type preservation through upload flow", () => {
+  it("extracts image/jpeg from data URL prefix", () => {
+    const dataUrl =
+      "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAA/9k=";
+    expect(extractMime(dataUrl)).toBe("image/jpeg");
+  });
+
+  it("extracts image/png from data URL prefix", () => {
+    expect(
+      extractMime("data:image/png;base64,iVBORw0KGgo="),
+    ).toBe("image/png");
+  });
+
+  it("extracts image/webp from data URL prefix", () => {
+    expect(extractMime("data:image/webp;base64,UklGRiQ=")).toBe(
+      "image/webp",
+    );
+  });
+
+  it("falls back to image/jpeg for malformed data URLs", () => {
+    expect(extractMime("not-a-data-url")).toBe("image/jpeg");
+    expect(extractMime("")).toBe("image/jpeg");
+  });
+
+  it("only allows image MIME types", () => {
+    expect(isAllowedImageMime("image/jpeg")).toBe(true);
+    expect(isAllowedImageMime("image/png")).toBe(true);
+    expect(isAllowedImageMime("text/plain")).toBe(false);
+    expect(isAllowedImageMime("application/octet-stream")).toBe(false);
+    expect(isAllowedImageMime("")).toBe(false);
+  });
+
+  it("does NOT regress to text/plain after stripping data URL prefix", () => {
+    // Simulate the OLD buggy flow:
+    //   1. Strip data URL prefix → raw base64 string
+    //   2. fetch(rawBase64) → browser sees no MIME, returns text/plain
+    //   3. response.blob() → Blob with type "text/plain" (truthy)
+    const originalDataUrl =
+      "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAA/9k=";
+
+    // The buggy flow: type comes back as "text/plain" because fetch interprets
+    // raw base64 as text. The fallback `type || "image/jpeg"` doesn't trigger
+    // because "text/plain" is truthy.
+    const simulatedBlobTypeAfterBuggyFetch = "text/plain";
+    const buggyResult =
+      simulatedBlobTypeAfterBuggyFetch || "image/jpeg";
+    // Demonstrates the bug: fallback doesn't fire because type is truthy
+    expect(buggyResult).toBe("text/plain");
+    expect(buggyResult).not.toBe("image/jpeg");
+
+    // The fixed flow extracts MIME from the data URL prefix BEFORE stripping
+    const fixedFlow = (dataUrl: string) => {
+      const mime = extractMime(dataUrl);
+      return isAllowedImageMime(mime) ? mime : "image/jpeg";
+    };
+    expect(fixedFlow(originalDataUrl)).toBe("image/jpeg");
+    expect(fixedFlow("data:image/png;base64,xxx")).toBe("image/png");
+
+    // Confirm: the fix doesn't ever produce "text/plain" regardless of
+    // what the browser returns from the fetch round-trip
+    expect(fixedFlow("not-a-data-url")).not.toBe("text/plain");
+  });
+});

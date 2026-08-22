@@ -110,9 +110,21 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
   const processImage = async (dataUrl: string) => {
     try {
       setStatus("processing");
-      const base64Data = dataUrl.replace(/^data:[^;]+;base64,/, "");
-      const response = await fetch(base64Data);
-      const originalBlob = await response.blob();
+
+      // Extract the MIME type from the data URL prefix BEFORE we lose it.
+      // The browser will return `text/plain` if we strip the prefix and
+      // re-fetch as raw base64, so we have to capture the type up-front.
+      const mimeMatch = dataUrl.match(/^data:([^;]+);/);
+      const inputMime = mimeMatch?.[1] || "image/jpeg";
+
+      // Fetch the data URL directly (the browser respects the MIME prefix).
+      const response = await fetch(dataUrl);
+      const originalBytes = await response.arrayBuffer();
+
+      // Force the blob type to match the actual content. Some browsers
+      // set .type to "" or text/plain for data URLs without an explicit
+      // Content-Type header; we know the truth from the prefix.
+      const originalBlob = new Blob([originalBytes], { type: inputMime });
 
       // Background removal (best-effort: if it fails, use original)
       let cleanedBlob: Blob = originalBlob;
@@ -120,6 +132,14 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
         cleanedBlob = await removeBackgroundFromBlob(originalBlob);
       } catch (bgErr) {
         console.warn("BG removal failed, using original:", bgErr);
+      }
+
+      // bg-removal may or may not set the output blob's type. Force it to
+      // PNG (the library's documented default output format).
+      if (!cleanedBlob.type || cleanedBlob.type === "text/plain") {
+        cleanedBlob = new Blob([await cleanedBlob.arrayBuffer()], {
+          type: "image/png",
+        });
       }
 
       const cleanedDataUrl = await blobToDataUrl(cleanedBlob);
@@ -172,7 +192,12 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
       };
 
       // Upload ORIGINAL first (it has the original framing)
-      const origType = originalBlob.type || "image/jpeg";
+      // Both blobs now have correct types set above, but defensively fall
+      // back to a valid image MIME if for some reason they don't.
+      const origType =
+        originalBlob.type && originalBlob.type !== "text/plain"
+          ? originalBlob.type
+          : inputMime || "image/jpeg";
       const origSigned = await requestSignedUrl(
         "capture.jpg",
         origType,
@@ -182,7 +207,10 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
       const originalUrl = origSigned.publicUrl;
 
       // Upload CLEANED second (background-removed version)
-      const cleanType = cleanedBlob.type || "image/jpeg";
+      const cleanType =
+        cleanedBlob.type && cleanedBlob.type !== "text/plain"
+          ? cleanedBlob.type
+          : "image/png";
       const cleanSigned = await requestSignedUrl(
         "capture-cleaned.jpg",
         cleanType,
