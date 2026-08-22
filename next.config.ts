@@ -13,7 +13,7 @@ const cspDirectives = [
   `font-src 'self' data:`,
   "worker-src 'self' blob:",
   "media-src 'self' blob:",
-  `connect-src 'self' https://${supabaseHost} wss://${supabaseHost} https://api.minimax.chat`,
+  `connect-src 'self' data: blob: https://${supabaseHost} wss://${supabaseHost} https://api.minimax.chat`,
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

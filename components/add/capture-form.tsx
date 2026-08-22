@@ -188,10 +188,19 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
       const inputMime = mimeMatch?.[1] || "image/jpeg";
       console.log("[upload] step=parse mime=", inputMime, "dataUrlLen=", dataUrl.length);
 
-      // ─── Step 2: Build the original blob with explicit MIME ─────────
-      const response = await fetch(dataUrl);
-      const originalBytes = await response.arrayBuffer();
-      const originalBlob = new Blob([originalBytes], { type: inputMime });
+      // ─── Step 2: Build the original blob from the data URL ──────────
+      // NOTE: We previously did `await fetch(dataUrl)` here. That failed
+      // because modern browsers (Chrome 96+) apply CSP `connect-src` to
+      // data URL fetches, and our CSP didn't include `data:`. To avoid
+      // that policy entirely we decode the base64 directly — no network
+      // round-trip, no CSP check, no fetch failure.
+      const [, base64 = ""] = dataUrl.split(",");
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const originalBlob = new Blob([bytes], { type: inputMime });
       console.log("[upload] step=originalBlob size=", originalBlob.size, "type=", originalBlob.type);
 
       // ─── Step 3: Background removal (best-effort) ───────────────────
