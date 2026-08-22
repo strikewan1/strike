@@ -13,7 +13,7 @@ const cspDirectives = [
   `font-src 'self' data:`,
   "worker-src 'self' blob:",
   "media-src 'self' blob:",
-  `connect-src 'self' data: blob: https://${supabaseHost} wss://${supabaseHost} https://generativelanguage.googleapis.com`,
+  `connect-src 'self' data: blob: https://${supabaseHost} wss://${supabaseHost} https://generativelanguage.googleapis.com https://unpkg.com https://*.imgly.com`,
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

@@ -75,6 +75,18 @@ function isModelUnavailable(err: unknown): boolean {
   );
 }
 
+/**
+ * Detects whether an error indicates a transient/retryable condition
+ * (rate limit, service unavailable, overload).
+ */
+function isRetryable(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return Boolean((err as Error & { retryable?: boolean }).retryable);
+}
+
+/** Sleep helper — small wrapper so tests can stub it. */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 interface ChatMessage {
   role: "system" | "user" | "assistant";
   content:
@@ -146,6 +158,7 @@ async function chatWithModel(
   if (!res.ok) {
     const text = await res.text();
     let friendly = `GoogleAI error ${res.status}`;
+    let isRetryable = false;
     try {
       const parsed = JSON.parse(text) as {
         error?: {
@@ -163,13 +176,21 @@ async function chatWithModel(
       ) {
         friendly = `GoogleAI API key inválida o sin permisos. Revisá GOOGLE_AI_API_KEY en Vercel env vars.`;
       } else if (res.status === 429 || errType === "rate_limit_error") {
-        friendly = `GoogleAI rate limit alcanzado. Probá en unos minutos.`;
+        friendly = `GoogleAI rate limit alcanzado. Esperá 1-2 minutos.`;
+        isRetryable = true;
       } else if (
         res.status === 404 ||
         errMsg?.toLowerCase().includes("no longer available")
       ) {
         // Include the model name so users/devs know which fallback chain failed
         friendly = `Modelo ${model} no disponible (404): ${errMsg ?? "model not found"}`;
+      } else if (res.status === 503 || errType === "service_unavailable") {
+        friendly = `GoogleAI service temporalmente no disponible. Reintentando con otro modelo...`;
+        isRetryable = true;
+      } else if (res.status === 529) {
+        // 529 = overloaded (Anthropic-style, but Google has been known to use it)
+        friendly = `GoogleAI sobrecargado. Reintentando...`;
+        isRetryable = true;
       } else if (errMsg) {
         friendly = `GoogleAI error ${res.status}: ${errMsg}`;
       }
@@ -178,7 +199,9 @@ async function chatWithModel(
     }
     const sanitized = text.length > 500 ? text.slice(0, 500) + "…" : text;
     console.error(`[GoogleAI] ${res.status} ${model}: ${sanitized}`);
-    throw new Error(friendly);
+    const err = new Error(friendly);
+    (err as Error & { retryable?: boolean }).retryable = isRetryable;
+    throw err;
   }
 
   const data = (await res.json()) as ChatResponse;
@@ -188,8 +211,9 @@ async function chatWithModel(
 }
 
 /**
- * Public entry point. Tries the configured model first, then falls back
- * to the chain on model-availability errors.
+ * Public entry point. Walks the fallback chain; on each candidate, retries
+ * up to 2x with backoff if the error is transient (429/503/529). On
+ * model-availability (404) errors, moves to the next candidate.
  */
 export async function googleAIChat(
   messages: ChatMessage[],
@@ -207,23 +231,51 @@ export async function googleAIChat(
     : MODEL_FALLBACKS;
 
   let lastError: unknown;
+
   for (const candidate of candidates) {
-    try {
-      return await chatWithModel(messages, options, candidate);
-    } catch (err) {
-      lastError = err;
-      // Only retry on model-availability errors. Surface everything
-      // else (auth, rate limit, server errors) immediately.
-      if (!isModelUnavailable(err)) {
-        throw err;
+    // Per-candidate retry: up to 2 attempts with 1.5s backoff for
+    // retryable errors. After 2 failed attempts on one model, give
+    // up on it and move to the next.
+    const maxAttempts = 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await chatWithModel(messages, options, candidate);
+      } catch (err) {
+        lastError = err;
+
+        // Model-availability (404) → don't retry this model, move on
+        if (isModelUnavailable(err)) {
+          console.warn(
+            `[GoogleAI] model ${candidate} unavailable, trying next fallback`,
+          );
+          break;
+        }
+
+        // Non-retryable error → surface immediately
+        if (!isRetryable(err)) {
+          throw err;
+        }
+
+        // Retryable: backoff if there are attempts left
+        if (attempt < maxAttempts) {
+          const backoffMs = 1500;
+          console.warn(
+            `[GoogleAI] model ${candidate} returned retryable error, retrying in ${backoffMs}ms (attempt ${attempt}/${maxAttempts})`,
+          );
+          await sleep(backoffMs);
+          continue;
+        }
+
+        // Out of retries on this model → move to next candidate
+        console.warn(
+          `[GoogleAI] model ${candidate} still failing after ${maxAttempts} attempts, trying next fallback`,
+        );
+        break;
       }
-      console.warn(
-        `[GoogleAI] model ${candidate} unavailable, trying next fallback`,
-      );
     }
   }
 
-  // All candidates failed with availability errors
+  // All candidates exhausted
   throw (
     lastError ??
     new Error("GoogleAI: all fallback models unavailable")
