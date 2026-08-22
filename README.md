@@ -40,10 +40,10 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...   # server-only, nunca exponer
 
 # Google AI Studio (Gemini) — gets key from https://aistudio.google.com/app/apikey
-GOOGLE_AI_API_KEY=AIza...   # empieza con AIza
+GOOGLE_AI_API_KEY=tu-key-aqui
 GOOGLE_AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-GOOGLE_AI_VISION_MODEL=gemini-2.0-flash
-GOOGLE_AI_TEXT_MODEL=gemini-2.0-flash
+GOOGLE_AI_VISION_MODEL=gemini-2.5-flash
+GOOGLE_AI_TEXT_MODEL=gemini-2.5-flash
 ```
 
 Sin Supabase configurado, la app entra en **modo preview**: muestra la UI pero el auth está deshabilitado.

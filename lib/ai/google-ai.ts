@@ -15,22 +15,63 @@ const GOOGLE_AI_BASE_URL =
 
 const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY ?? "";
 
+// Default models — these should be models available on the
+// OpenAI-compatible endpoint. Note: gemini-2.0-flash was deprecated
+// by Google in late 2025; we now use the 2.5 series by default.
+// Override per request via `options.model` if needed.
 export const VISION_MODEL =
-  process.env.GOOGLE_AI_VISION_MODEL ?? "gemini-2.0-flash";
-export const TEXT_MODEL = process.env.GOOGLE_AI_TEXT_MODEL ?? "gemini-2.0-flash";
+  process.env.GOOGLE_AI_VISION_MODEL ?? "gemini-2.5-flash";
+export const TEXT_MODEL =
+  process.env.GOOGLE_AI_TEXT_MODEL ?? "gemini-2.5-flash";
 
 /**
  * Sanity check at module load: warn (but don't crash) when the API key
- * looks missing or malformed. Helps surface config errors during smoke
- * tests instead of failing silently later.
+ * is missing or suspiciously short. We don't check the prefix because
+ * Google has changed key formats over time (AIza..., AQ..., etc).
  */
 if (!GOOGLE_AI_API_KEY) {
   console.warn(
     "[GoogleAI] GOOGLE_AI_API_KEY is not set — AI features will return mocks",
   );
-} else if (!GOOGLE_AI_API_KEY.startsWith("AIza")) {
+} else if (GOOGLE_AI_API_KEY.length < 20) {
   console.warn(
-    `[GoogleAI] GOOGLE_AI_API_KEY doesn't start with 'AIza' — did you paste the wrong key? (got ${GOOGLE_AI_API_KEY.length} chars)`,
+    `[GoogleAI] GOOGLE_AI_API_KEY looks too short (${GOOGLE_AI_API_KEY.length} chars). Did you truncate it?`,
+  );
+}
+
+/**
+ * Fallback chain — when a model returns 404 (deprecated/unavailable),
+ * try the next one in the list. This saved us once already when Google
+ * silently deprecated gemini-2.0-flash.
+ *
+ * The chain starts with the configured default and ends with cheap
+ * lightweight fallbacks.
+ */
+const MODEL_FALLBACKS = [
+  // Configured defaults
+  VISION_MODEL,
+  TEXT_MODEL,
+  // Recent stable aliases — Google keeps these pointing at the latest
+  // working flash/pro model even after specific versions are deprecated.
+  "gemini-flash-latest",
+  "gemini-flash-lite-latest",
+  // Older stable that may still be available
+  "gemini-2.5-flash-lite",
+];
+
+/**
+ * Detects whether an error indicates the model is missing/deprecated.
+ * Google's OpenAI-compat error format:
+ *   { "error": { "code": 404, "status": "NOT_FOUND", "message": "...no longer available..." } }
+ */
+function isModelUnavailable(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes("404") ||
+    msg.includes("not found") ||
+    msg.includes("no longer available") ||
+    msg.includes("is not supported")
   );
 }
 
@@ -60,27 +101,27 @@ interface ChatResponse {
   }>;
 }
 
-export async function googleAIChat(
+interface ChatOptions {
+  temperature?: number;
+  jsonMode?: boolean;
+  maxTokens?: number;
+  model?: string;
+}
+
+/**
+ * Internal: make a single completion request against a specific model.
+ * Throws on any non-2xx response.
+ */
+async function chatWithModel(
   messages: ChatMessage[],
-  options: {
-    temperature?: number;
-    jsonMode?: boolean;
-    maxTokens?: number;
-    model?: string;
-  } = {},
+  options: ChatOptions,
+  model: string,
 ): Promise<string> {
   const {
     temperature = 0.4,
     jsonMode = true,
     maxTokens = 1500,
-    model = TEXT_MODEL,
   } = options;
-
-  // Guard: bail with a friendly error when no key is configured.
-  // The mocks below will be returned instead.
-  if (!GOOGLE_AI_API_KEY) {
-    return mockResponse(messages);
-  }
 
   const body: ChatRequest = {
     model,
@@ -115,10 +156,6 @@ export async function googleAIChat(
       };
       const errType = parsed.error?.type;
       const errMsg = parsed.error?.message;
-      // Google error format (OpenAI-compatible):
-      //   401: "API key not valid..." / type "invalid_request_error"
-      //   403: "Permission denied" / type "permission_denied"
-      //   429: "Resource has been exhausted" / type "rate_limit_error"
       if (
         res.status === 401 ||
         errType === "invalid_request_error" ||
@@ -127,15 +164,20 @@ export async function googleAIChat(
         friendly = `GoogleAI API key inválida o sin permisos. Revisá GOOGLE_AI_API_KEY en Vercel env vars.`;
       } else if (res.status === 429 || errType === "rate_limit_error") {
         friendly = `GoogleAI rate limit alcanzado. Probá en unos minutos.`;
+      } else if (
+        res.status === 404 ||
+        errMsg?.toLowerCase().includes("no longer available")
+      ) {
+        // Include the model name so users/devs know which fallback chain failed
+        friendly = `Modelo ${model} no disponible (404): ${errMsg ?? "model not found"}`;
       } else if (errMsg) {
         friendly = `GoogleAI error ${res.status}: ${errMsg}`;
       }
     } catch {
       // Body wasn't JSON; fall through to raw text
     }
-    // Sanitize before logging to avoid dumping any sensitive fragments.
     const sanitized = text.length > 500 ? text.slice(0, 500) + "…" : text;
-    console.error(`[GoogleAI] ${res.status}: ${sanitized}`);
+    console.error(`[GoogleAI] ${res.status} ${model}: ${sanitized}`);
     throw new Error(friendly);
   }
 
@@ -143,6 +185,49 @@ export async function googleAIChat(
   const content = data.choices[0]?.message?.content;
   if (!content) throw new Error("GoogleAI returned empty content");
   return content;
+}
+
+/**
+ * Public entry point. Tries the configured model first, then falls back
+ * to the chain on model-availability errors.
+ */
+export async function googleAIChat(
+  messages: ChatMessage[],
+  options: ChatOptions = {},
+): Promise<string> {
+  // Bail with mock when no key configured
+  if (!GOOGLE_AI_API_KEY) {
+    return mockResponse(messages);
+  }
+
+  // Build the candidate list — explicit model wins over fallback chain
+  const explicit = options.model;
+  const candidates = explicit
+    ? [explicit, ...MODEL_FALLBACKS.filter((m) => m !== explicit)]
+    : MODEL_FALLBACKS;
+
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      return await chatWithModel(messages, options, candidate);
+    } catch (err) {
+      lastError = err;
+      // Only retry on model-availability errors. Surface everything
+      // else (auth, rate limit, server errors) immediately.
+      if (!isModelUnavailable(err)) {
+        throw err;
+      }
+      console.warn(
+        `[GoogleAI] model ${candidate} unavailable, trying next fallback`,
+      );
+    }
+  }
+
+  // All candidates failed with availability errors
+  throw (
+    lastError ??
+    new Error("GoogleAI: all fallback models unavailable")
+  );
 }
 
 // Parse JSON safely. Strips markdown fences if model ignores instructions.

@@ -95,21 +95,28 @@ Si todavía no tenés key:
 
 1. Andá a https://aistudio.google.com/app/apikey
 2. Click **"Create API key"** → elegí (o creá) un proyecto
-3. 📋 Copiala — empieza con `AIza...` y suele tener ~39 caracteres
-4. Free tier: **Gemini 2.0 Flash** = 15 RPM, 1500 RPD gratis (más que suficiente para MVP)
+3. 📋 Copiala completa (suele tener ~39 caracteres)
+4. Free tier: **Gemini 2.5 Flash** = gratis (más que suficiente para MVP)
+
+> ⚠️ **Nota**: Google deprecó `gemini-2.0-flash` a fines de 2025. Usamos
+> `gemini-2.5-flash` como default. Si Google deprecá otro modelo en el
+> futuro, `lib/ai/google-ai.ts` tiene un fallback chain que prueba
+> `gemini-flash-latest` → `gemini-2.5-flash-lite` automáticamente antes de fallar.
 
 Los defaults de `.env.example` ya están bien. Si querés cambiar modelo:
 
 ```bash
 GOOGLE_AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-GOOGLE_AI_VISION_MODEL=gemini-2.0-flash
-GOOGLE_AI_TEXT_MODEL=gemini-2.0-flash
+GOOGLE_AI_VISION_MODEL=gemini-2.5-flash
+GOOGLE_AI_TEXT_MODEL=gemini-2.5-flash
 ```
 
-Otras opciones de modelo (todos free tier):
-- `gemini-2.0-flash` (rápido, default — recomendado)
-- `gemini-2.5-flash` (mejor calidad, similar velocidad)
-- `gemini-2.5-pro` (mejor razonamiento, más lento, rate-limited)
+Otras opciones de modelo (todos free tier, los que confirmamos disponibles):
+- `gemini-2.5-flash` (rápido, default — recomendado)
+- `gemini-flash-latest` (alias al último estable)
+- `gemini-2.5-flash-lite` (más barato, menos potente)
+- `gemini-2.5-pro` (mejor razonamiento, más lento)
+- `gemini-flash-lite-latest` (lo más liviano)
 
 ---
 
@@ -145,8 +152,8 @@ Settings → Environment Variables → agregar las siguientes:
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...` | Production only ⚠️ |
 | `GOOGLE_AI_API_KEY` | `AIza...` | Production, Preview |
 | `GOOGLE_AI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | Production, Preview |
-| `GOOGLE_AI_VISION_MODEL` | `gemini-2.0-flash` | Production, Preview |
-| `GOOGLE_AI_TEXT_MODEL` | `gemini-2.0-flash` | Production, Preview |
+| `GOOGLE_AI_VISION_MODEL` | `gemini-2.5-flash` | Production, Preview |
+| `GOOGLE_AI_TEXT_MODEL` | `gemini-2.5-flash` | Production, Preview |
 | `NEXT_PUBLIC_APP_URL` | `https://strike-tu-usuario.vercel.app` | Production |
 
 **Opcionales para producción real**:
@@ -233,18 +240,25 @@ npm run build
 ### CSP errors en consola del browser
 Los headers CSP son estrictos. Si ves errores tipo "Refused to connect to X", agregá el dominio en `next.config.ts` (función `headers()`).
 
-### Google AI 401/403/429
-Verificá que `GOOGLE_AI_API_KEY` esté bien copiada en Vercel. Debe empezar con `AIza`. Probá el endpoint directamente:
+### Google AI 401/403/429/404
+Verificá que `GOOGLE_AI_API_KEY` esté bien copiada en Vercel. Probá el endpoint directamente:
 ```bash
-KEY="AIza-tu-key-aqui"
+KEY="tu-key-aqui"   # pegá tu key real
+
+# Test 1: Chat con el modelo default
 curl -X POST "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gemini-2.0-flash","messages":[{"role":"user","content":"say ok"}],"max_tokens":10}'
+  -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"say ok"}],"max_tokens":10}'
+
+# Test 2 (debug): Listar modelos disponibles para tu key
+curl "https://generativelanguage.googleapis.com/v1beta/models?key=$KEY" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('\n'.join(m['name'] for m in d.get('models',[])))"
 ```
 - ✅ Si devuelve `"ok"` en el contenido → key válida
 - ❌ Si devuelve 401 → key inválida (regenerala en aistudio.google.com/app/apikey)
-- ❌ Si devuelve 429 → rate limit alcanzado (esperá unos minutos o upgradeá a plan pago)
+- ❌ Si devuelve 429 → rate limit alcanzado (esperá unos minutos)
+- ❌ Si devuelve 404 → modelo deprecado. El fallback chain en `lib/ai/google-ai.ts` se encarga automáticamente; si ves esto en logs, es porque TODOS los fallbacks fallaron
 
 ### Storage upload falla con 403
 Las políticas RLS están bien seteadas en `0002_storage_buckets.sql`. Verificá que las migraciones se corrieron todas.
