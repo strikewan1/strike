@@ -90,27 +90,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // For DOWNLOAD, we use a long-lived signed URL (1 year) rather than
-    // getPublicUrl(). Why: getPublicUrl returns a /public/... URL that
-    // only serves files when the bucket is actually public. If the
-    // bucket is private (the default), the URL would 400. A signed
-    // URL works regardless of bucket privacy, and 1 year is long
-    // enough that we'll re-upload images long before expiry.
-    const { data: downloadSigned, error: downloadError } =
-      await supabase.storage
-        .from(bucket)
-        .createSignedUrl(objectPath, 60 * 60 * 24 * 365);
-
-    if (downloadError || !downloadSigned) {
-      return NextResponse.json(
-        { error: downloadError?.message ?? "Failed to sign download URL" },
-        { status: 500 },
-      );
-    }
-
-    // We still return publicUrl for backwards-compatibility / future
-    // migrations (e.g., if the user makes buckets public, the stored
-    // publicUrls start working).
+    // For the DOWNLOAD URL: with buckets now public (migration 0003),
+    // getPublicUrl() returns a valid URL that actually serves files.
+    // We previously tried createSignedUrl() here but that requires the
+    // object to already exist — and we haven't uploaded it yet, so it
+    // returned "Object not found". getPublicUrl() works because it just
+    // constructs the URL without checking storage.
     const {
       data: { publicUrl },
     } = supabase.storage.from(bucket).getPublicUrl(objectPath);
@@ -120,7 +105,6 @@ export async function POST(req: NextRequest) {
       token: data.token,
       path: objectPath,
       publicUrl,
-      signedDownloadUrl: downloadSigned.signedUrl,
       contentType,
     });
   } catch (error) {

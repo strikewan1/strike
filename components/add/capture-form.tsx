@@ -119,7 +119,6 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
     path: string;
     token: string;
     publicUrl: string;
-    signedDownloadUrl: string;
   }> => {
     const headerBuf = await blobForMagicBytes.slice(0, 16).arrayBuffer();
     const headerBytes = new Uint8Array(headerBuf);
@@ -241,11 +240,8 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
         );
         console.log("[upload] step=sign-url-original OK path=", origSigned.path);
         await putToSignedUrl("garments", origSigned.path, origSigned.token, originalBlob);
-        // Prefer the long-lived signed download URL. Fall back to the
-        // /public/... URL if the server didn't include it (older route).
-        originalUrl =
-          (origSigned as { signedDownloadUrl?: string }).signedDownloadUrl ??
-          origSigned.publicUrl;
+        // Buckets are now public (migration 0003), so publicUrl works.
+        originalUrl = origSigned.publicUrl;
         console.log("[upload] step=put-original OK url=", originalUrl);
       } catch (err) {
         console.error("[upload] step=upload-original FAILED:", err);
@@ -272,9 +268,7 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
         );
         console.log("[upload] step=sign-url-cleaned OK path=", cleanSigned.path);
         await putToSignedUrl("garments", cleanSigned.path, cleanSigned.token, cleanedBlob);
-        cleanedUrl =
-          (cleanSigned as { signedDownloadUrl?: string }).signedDownloadUrl ??
-          cleanSigned.publicUrl;
+        cleanedUrl = cleanSigned.publicUrl;
         console.log("[upload] step=put-cleaned OK url=", cleanedUrl);
       } catch (err) {
         console.error("[upload] step=upload-cleaned FAILED:", err);
