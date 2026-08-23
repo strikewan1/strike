@@ -611,28 +611,84 @@ export const OutfitSuggestionSchema = z
     explanation: z.string().default(""),
     formality: z.union([z.number(), z.string()]).default(2),
   })
-  .transform((data) => {
-    // Normalize garments — each item may come in many shapes
-    const garments = data.garments
-      .map((g) => {
-        if (!g || typeof g !== "object") return null;
-        const obj = g as Record<string, unknown>;
-        const garmentId =
-          (typeof obj.garment_id === "string" && obj.garment_id) ||
-          (typeof obj.id === "string" && obj.id) ||
-          (typeof obj.garmentId === "string" && obj.garmentId) ||
-          "";
-        const rawRole =
-          obj.layer_role ?? obj.role ?? obj.type ?? obj.layer ?? "top";
-        return {
-          garment_id: garmentId,
-          layer_role: normalizeLayerRole(rawRole),
-        };
-      })
-      .filter(
-        (g): g is { garment_id: string; layer_role: LayerRole } =>
-          g !== null && g.garment_id !== "",
-      );
+  // Gemini sometimes returns flat fields (top_id, bottom_id, ...) instead
+  // of an array. Accept either shape via passthrough.
+  .passthrough()
+  .transform((raw) => {
+    const data = raw as {
+      title?: string;
+      garments?: unknown[];
+      explanation?: string;
+      formality?: number | string;
+      // Flat fields that Gemini sometimes uses:
+      outfit_id?: string;
+      top_id?: string;
+      bottom_id?: string;
+      outerwear_id?: string | null;
+      footwear_id?: string;
+      accessory_ids?: string[];
+      // Synonyms for the flat fields:
+      shoes_id?: string;
+      jacket_id?: string;
+      pant_id?: string;
+      shirt_id?: string;
+    };
+
+    // Strategy: prefer the garments array if non-empty; otherwise build
+    // one from the flat fields.
+    let garments: { garment_id: string; layer_role: LayerRole }[] = [];
+
+    const arr = Array.isArray(data.garments) ? data.garments : [];
+    if (arr.length > 0) {
+      garments = arr
+        .map((g) => {
+          if (!g || typeof g !== "object") return null;
+          const obj = g as Record<string, unknown>;
+          const garmentId =
+            (typeof obj.garment_id === "string" && obj.garment_id) ||
+            (typeof obj.id === "string" && obj.id) ||
+            (typeof obj.garmentId === "string" && obj.garmentId) ||
+            "";
+          const rawRole =
+            obj.layer_role ?? obj.role ?? obj.type ?? obj.layer ?? "top";
+          if (!garmentId) return null;
+          return {
+            garment_id: garmentId,
+            layer_role: normalizeLayerRole(rawRole),
+          };
+        })
+        .filter(
+          (g): g is { garment_id: string; layer_role: LayerRole } =>
+            g !== null,
+        );
+    } else {
+      // Build from flat fields
+      const flat: Array<{ id: string; role: string }> = [];
+      if (data.top_id) flat.push({ id: data.top_id, role: "top" });
+      if (data.shirt_id) flat.push({ id: data.shirt_id, role: "top" });
+      if (data.bottom_id) flat.push({ id: data.bottom_id, role: "bottom" });
+      if (data.pant_id) flat.push({ id: data.pant_id, role: "bottom" });
+      if (data.outerwear_id)
+        flat.push({ id: data.outerwear_id, role: "layer" });
+      if (data.jacket_id) flat.push({ id: data.jacket_id, role: "layer" });
+      if (data.footwear_id)
+        flat.push({ id: data.footwear_id, role: "footwear" });
+      if (data.shoes_id)
+        flat.push({ id: data.shoes_id, role: "footwear" });
+      if (Array.isArray(data.accessory_ids)) {
+        for (const id of data.accessory_ids) {
+          if (typeof id === "string") {
+            flat.push({ id, role: "accessory" });
+          }
+        }
+      }
+      garments = flat
+        .filter((f) => f.id && f.id.length > 0)
+        .map((f) => ({
+          garment_id: f.id,
+          layer_role: normalizeLayerRole(f.role),
+        }));
+    }
 
     // Normalize formality to 0-5 integer
     const formalityNum =
@@ -646,7 +702,7 @@ export const OutfitSuggestionSchema = z
     return {
       title: data.title || "Untitled outfit",
       garments,
-      explanation: data.explanation,
+      explanation: data.explanation || "",
       formality,
     };
   });
