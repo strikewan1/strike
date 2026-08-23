@@ -9,6 +9,7 @@ import {
   preloadRemovalModel,
   removeBackgroundFromBlob,
 } from "@/lib/background-removal";
+import { ImageEditor } from "@/components/add/image-editor";
 
 type Status =
   | "idle"
@@ -30,6 +31,7 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
   const [cameraStarted, setCameraStarted] = useState(false);
 
   // Initialize camera (only when source === "camera")
@@ -97,7 +99,8 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
     // Stop camera
     streamRef.current?.getTracks().forEach((t) => t.stop());
 
-    await processImage(dataUrl);
+    // Open the editor so the user can crop/rotate/flip before upload.
+    setPendingImage(dataUrl);
   };
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -105,7 +108,9 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
     if (!file) return;
     const dataUrl = await blobToDataUrl(file);
     setPreview(dataUrl);
-    await processImage(dataUrl);
+
+    // Open the editor so the user can crop/rotate/flip before upload.
+    setPendingImage(dataUrl);
   };
 
   // Helper: request a signed upload URL for a specific path.
@@ -332,9 +337,26 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
     }
   };
 
+  // Image editor overlay — opens whenever a photo is selected.
+  // Defined once so it can wrap either the gallery or camera view.
+  const editor = pendingImage ? (
+    <ImageEditor
+      imageDataUrl={pendingImage}
+      onCancel={() => {
+        setPendingImage(null);
+        setPreview(null);
+      }}
+      onSave={(editedDataUrl) => {
+        setPendingImage(null);
+        setPreview(editedDataUrl);
+        void processImage(editedDataUrl);
+      }}
+    />
+  ) : null;
+
   // Gallery view
   if (source === "gallery") {
-    return (
+    const gallery = (
       <div className="flex-1 px-6 pb-6 flex flex-col">
         <input
           ref={fileInputRef}
@@ -377,10 +399,16 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
         )}
       </div>
     );
+    return (
+      <>
+        {gallery}
+        {editor}
+      </>
+    );
   }
 
   // Camera view
-  return (
+  const camera = (
     <div className="flex-1 px-4 pb-6 flex flex-col">
       {!preview ? (
         <>
@@ -419,6 +447,13 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
         />
       )}
     </div>
+  );
+
+  return (
+    <>
+      {camera}
+      {editor}
+    </>
   );
 }
 
