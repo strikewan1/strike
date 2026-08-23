@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { Chip, ChipGroup } from "@/components/ui/chip";
@@ -22,6 +23,23 @@ const OCCASIONS = [
   { value: "evento", label: "Evento" },
 ];
 
+// Default cooldown when the AI responds with a rate-limit error but
+// doesn't tell us how long to wait. Per-minute limits reset at the
+// top of each minute, so 60s is a safe upper bound.
+const DEFAULT_COOLDOWN_SECONDS = 60;
+
+/**
+ * Pull the wait time out of an error message like "Please retry in
+ * 30.5s." or "retry in 9s." Returns null if not parseable.
+ */
+function parseRetryAfter(message: string | undefined): number | null {
+  if (!message) return null;
+  const m = message.match(/retry in (\d+(?:\.\d+)?)s/i);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  return Number.isFinite(n) ? Math.max(1, Math.ceil(n)) : null;
+}
+
 export function NewOutfitForm() {
   const router = useRouter();
   const [occasion, setOccasion] = useState<string>("trabajo");
@@ -29,8 +47,33 @@ export function NewOutfitForm() {
   const [temp, setTemp] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Cooldown timestamp (epoch ms) when to allow the next request.
+  // Displayed as a countdown on the submit button.
+  const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState(0);
+
+  // Tick down once per second while cooling down.
+  useEffect(() => {
+    if (cooldownUntil === null) return;
+    const tick = () => {
+      const ms = cooldownUntil - Date.now();
+      if (ms <= 0) {
+        setCooldownUntil(null);
+        setSecondsLeft(0);
+      } else {
+        setSecondsLeft(Math.ceil(ms / 1000));
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [cooldownUntil]);
 
   const handleSubmit = async () => {
+    if (cooldownUntil && cooldownUntil > Date.now()) {
+      // Blocked by cooldown — UI should prevent this anyway.
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -46,7 +89,27 @@ export function NewOutfitForm() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? body.message ?? "Error al generar");
+        const message =
+          (body as { error?: string; message?: string }).error ??
+          (body as { message?: string }).message ??
+          "Error al generar";
+
+        // Cooldown on rate limit / quota errors. Use the retry hint from
+        // the server if present, otherwise default to 60s.
+        if (
+          message.toLowerCase().includes("rate limit") ||
+          message.toLowerCase().includes("quota") ||
+          message.toLowerCase().includes("esperá")
+        ) {
+          const hint = parseRetryAfter(
+            (body as { raw?: string }).raw ?? message,
+          );
+          const wait = hint ?? DEFAULT_COOLDOWN_SECONDS;
+          setCooldownUntil(Date.now() + wait * 1000);
+          toast.error(message, { duration: 6000 });
+        }
+
+        throw new Error(message);
       }
       const data = await res.json();
       sessionStorage.setItem("strike:outfits", JSON.stringify(data));
@@ -57,6 +120,13 @@ export function NewOutfitForm() {
       setLoading(false);
     }
   };
+
+  const onCooldown = cooldownUntil !== null && secondsLeft > 0;
+  const buttonLabel = loading
+    ? "Construyendo outfits…"
+    : onCooldown
+      ? `Esperá ${secondsLeft}s`
+      : "Generar outfits";
 
   return (
     <div className="flex-1 px-6 pb-6 flex flex-col">
@@ -111,9 +181,16 @@ export function NewOutfitForm() {
           fullWidth
           onClick={handleSubmit}
           loading={loading}
+          disabled={onCooldown}
+          aria-busy={loading || onCooldown}
         >
-          {loading ? "Construyendo outfits…" : "Generar outfits"}
+          {buttonLabel}
         </Button>
+        {onCooldown && (
+          <p className="text-xs text-muted text-center mt-2">
+            Cooldown de Gemini · el botón se habilita automáticamente
+          </p>
+        )}
       </div>
     </div>
   );
