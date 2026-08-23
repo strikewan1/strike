@@ -16,13 +16,14 @@ const GOOGLE_AI_BASE_URL =
 const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY ?? "";
 
 // Default models — these should be models available on the
-// OpenAI-compatible endpoint. Note: gemini-2.0-flash was deprecated
-// by Google in late 2025; we now use the 2.5 series by default.
-// Override per request via `options.model` if needed.
+// OpenAI-compatible endpoint. gemini-flash-latest is an alias that
+// Google keeps pointing at the most recent stable Flash model. We used
+// to default to gemini-2.5-flash but that one is now deprecated for
+// new users. Override per request via `options.model` if needed.
 export const VISION_MODEL =
-  process.env.GOOGLE_AI_VISION_MODEL ?? "gemini-2.5-flash";
+  process.env.GOOGLE_AI_VISION_MODEL ?? "gemini-flash-latest";
 export const TEXT_MODEL =
-  process.env.GOOGLE_AI_TEXT_MODEL ?? "gemini-2.5-flash";
+  process.env.GOOGLE_AI_TEXT_MODEL ?? "gemini-flash-latest";
 
 /**
  * Sanity check at module load: warn (but don't crash) when the API key
@@ -47,6 +48,8 @@ const DEPRECATED_MODELS = new Set([
   "gemini-2.0-flash",
   "gemini-2.0-flash-exp",
   "gemini-2.0-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
   "gemini-1.5-flash",
   "gemini-1.5-flash-latest",
   "gemini-1.5-pro",
@@ -57,7 +60,7 @@ function warnIfDeprecated(label: string, model: string) {
   if (DEPRECATED_MODELS.has(model)) {
     console.warn(
       `[GoogleAI] ${label}=${model} is DEPRECATED by Google and returns 404. ` +
-        `Change to gemini-2.5-flash (or gemini-flash-latest) in Vercel env vars.`,
+        `Change to gemini-flash-latest in Vercel env vars.`,
     );
   }
 }
@@ -77,12 +80,15 @@ const MODEL_FALLBACKS_RAW = [
   TEXT_MODEL,
   // Recent stable aliases — Google keeps these pointing at the latest
   // working flash/pro model even after specific versions are deprecated.
+  // These are FIRST in the chain because they're the safest choice.
   "gemini-flash-latest",
   "gemini-flash-lite-latest",
-  // Older stable that may still be available
+  "gemini-pro-latest",
+  // Lighter variants
   "gemini-2.5-flash-lite",
-  "gemini-2.5-pro",
-  "gemini-2.5-flash",
+  // Newer preview models
+  "gemini-3-flash-preview",
+  "gemini-3.1-flash-lite",
 ];
 const MODEL_FALLBACKS = Array.from(
   new Set(MODEL_FALLBACKS_RAW),

@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
     await supabase.from("ai_cache").insert({
       image_hash: hash,
       response: result,
-      model: process.env.GOOGLE_AI_VISION_MODEL ?? "gemini-2.5-flash",
+      model: process.env.GOOGLE_AI_VISION_MODEL ?? "gemini-flash-latest",
     });
 
     return NextResponse.json(result);

@@ -96,27 +96,24 @@ Si todavía no tenés key:
 1. Andá a https://aistudio.google.com/app/apikey
 2. Click **"Create API key"** → elegí (o creá) un proyecto
 3. 📋 Copiala completa (suele tener ~39 caracteres)
-4. Free tier: **Gemini 2.5 Flash** = gratis (más que suficiente para MVP)
+4. Free tier: **Gemini Flash** = gratis (más que suficiente para MVP)
 
-> ⚠️ **Nota**: Google deprecó `gemini-2.0-flash` a fines de 2025. Usamos
-> `gemini-2.5-flash` como default. Si Google deprecá otro modelo en el
-> futuro, `lib/ai/google-ai.ts` tiene un fallback chain que prueba
-> `gemini-flash-latest` → `gemini-2.5-flash-lite` automáticamente antes de fallar.
+> ⚠️ **Nota**: Google deprecó `gemini-2.0-flash` y `gemini-2.5-flash` (este último para new users). Usamos `gemini-flash-latest` que es un alias estable. Si Google deprecá otro modelo en el futuro, `lib/ai/google-ai.ts` tiene un fallback chain que prueba `gemini-flash-lite-latest` → `gemini-pro-latest` → `gemini-2.5-flash-lite` → `gemini-3-flash-preview` automáticamente antes de fallar.
 
 Los defaults de `.env.example` ya están bien. Si querés cambiar modelo:
 
 ```bash
 GOOGLE_AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-GOOGLE_AI_VISION_MODEL=gemini-2.5-flash
-GOOGLE_AI_TEXT_MODEL=gemini-2.5-flash
+GOOGLE_AI_VISION_MODEL=gemini-flash-latest
+GOOGLE_AI_TEXT_MODEL=gemini-flash-latest
 ```
 
 Otras opciones de modelo (todos free tier, los que confirmamos disponibles):
-- `gemini-2.5-flash` (rápido, default — recomendado)
-- `gemini-flash-latest` (alias al último estable)
-- `gemini-2.5-flash-lite` (más barato, menos potente)
-- `gemini-2.5-pro` (mejor razonamiento, más lento)
-- `gemini-flash-lite-latest` (lo más liviano)
+- `gemini-flash-latest` (alias estable, default — recomendado)
+- `gemini-flash-lite-latest` (más liviano)
+- `gemini-pro-latest` (más potente)
+- `gemini-2.5-flash-lite` (más barato)
+- `gemini-3-flash-preview` (preview, puede cambiar)
 
 ---
 
@@ -152,8 +149,8 @@ Settings → Environment Variables → agregar las siguientes:
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJ...` | Production only ⚠️ |
 | `GOOGLE_AI_API_KEY` | `AIza...` | Production, Preview |
 | `GOOGLE_AI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | Production, Preview |
-| `GOOGLE_AI_VISION_MODEL` | `gemini-2.5-flash` | Production, Preview |
-| `GOOGLE_AI_TEXT_MODEL` | `gemini-2.5-flash` | Production, Preview |
+| `GOOGLE_AI_VISION_MODEL` | `gemini-flash-latest` | Production, Preview |
+| `GOOGLE_AI_TEXT_MODEL` | `gemini-flash-latest` | Production, Preview |
 | `NEXT_PUBLIC_APP_URL` | `https://strike-tu-usuario.vercel.app` | Production |
 
 **Opcionales para producción real**:
@@ -249,7 +246,7 @@ KEY="tu-key-aqui"   # pegá tu key real
 curl -X POST "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" \
   -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"say ok"}],"max_tokens":10}'
+  -d '{"model":"gemini-flash-latest","messages":[{"role":"user","content":"say ok"}],"max_tokens":10}'
 
 # Test 2 (debug): Listar modelos disponibles para tu key
 curl "https://generativelanguage.googleapis.com/v1beta/models?key=$KEY" \
