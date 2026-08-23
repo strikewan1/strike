@@ -109,16 +109,45 @@ export async function POST(req: NextRequest) {
         { role: "system", content: OUTFIT_SYSTEM_PROMPT },
         { role: "user", content: userPrompt },
       ],
-      { jsonMode: true, maxTokens: 2500, temperature: 0.7 },
+      // max_tokens raised from 2500→4000 — Gemini occasionally exceeded
+      // 2500 with longer explanations, producing truncated JSON.
+      { jsonMode: true, maxTokens: 4000, temperature: 0.7 },
     );
 
-    const parsed2 = OutfitResponseSchema.safeParse(parseJsonSafe(raw));
-    if (!parsed2.success) {
+    let parsed2;
+    try {
+      parsed2 = OutfitResponseSchema.safeParse(parseJsonSafe(raw));
+    } catch (parseErr) {
+      console.error(
+        "[generate-outfit] JSON parse failed:",
+        parseErr instanceof Error ? parseErr.message : parseErr,
+      );
+      console.error(
+        "[generate-outfit] raw from Gemini (first 500 chars):",
+        raw.slice(0, 500),
+      );
       return NextResponse.json(
         {
-          error: "AI returned invalid response",
+          error: "AI returned unparseable response. Try again.",
+          raw: raw.slice(0, 500),
+        },
+        { status: 502 },
+      );
+    }
+
+    if (!parsed2.success) {
+      console.error(
+        "[generate-outfit] OutfitResponseSchema validation failed:",
+        JSON.stringify(parsed2.error.flatten()),
+      );
+      console.error(
+        "[generate-outfit] raw from Gemini (first 500 chars):",
+        raw.slice(0, 500),
+      );
+      return NextResponse.json(
+        {
+          error: "AI returned invalid response. Try again.",
           details: parsed2.error.flatten(),
-          raw,
         },
         { status: 502 },
       );
@@ -127,12 +156,28 @@ export async function POST(req: NextRequest) {
     // Validate that every garment_id exists in user's closet
     const validIds = new Set(garments.map((g) => g.id));
     const validatedOutfits = parsed2.data.outfits
-      .map((o) => ({
-        ...o,
-        garments: o.garments.filter((gi) => validIds.has(gi.garment_id)),
-      }))
-      .filter((o) => o.garments.length >= 2)
+      .map((o) => {
+        const garments = o.garments.filter((gi) => validIds.has(gi.garment_id));
+        return { ...o, garments };
+      })
+      // Keep outfits with at least 1 valid garment — too strict to require
+      // 2 since Gemini sometimes returns just top+bottom without accessories.
+      .filter((o) => o.garments.length >= 1)
       .slice(0, outfitCount);
+
+    // If everything was filtered out (Gemini invented garment IDs that
+    // don't exist in the closet), surface a useful error.
+    if (validatedOutfits.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "No se pudieron construir outfits con las prendas disponibles. " +
+            "Asegurate de tener al menos un top, un bottom y calzado en tu closet.",
+          outfits: [],
+        },
+        { status: 200 },
+      );
+    }
 
     return NextResponse.json({
       outfits: validatedOutfits,

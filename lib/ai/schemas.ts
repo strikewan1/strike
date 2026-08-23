@@ -544,28 +544,152 @@ export const RecognizedGarmentSchema = z
 export type RecognizedGarment = z.infer<typeof RecognizedGarmentSchema>;
 
 // =====================================================
-// OUTFIT generation schema
+// OUTFIT generation schema — permissive with normalization
 // =====================================================
 
-export const OutfitItemRefSchema = z.object({
-  garment_id: z.string(),
-  layer_role: z.enum(["top", "bottom", "layer", "footwear", "accessory"]),
-});
+// Gemini occasionally returns synonyms or invented layer roles
+// ("upper" instead of "top", "outer" instead of "layer", etc.). We
+// accept any string and normalize below. The schema NEVER throws —
+// at worst the caller gets a fallback layer_role that the UI
+// can still render.
 
-export const OutfitSuggestionSchema = z.object({
-  title: z.string(),
-  garments: z.array(OutfitItemRefSchema).min(2).max(7),
-  explanation: z.string(),
-  formality: z.number().int().min(0).max(5),
-});
+const VALID_LAYER_ROLES = [
+  "top",
+  "bottom",
+  "layer",
+  "footwear",
+  "accessory",
+] as const;
+type LayerRole = (typeof VALID_LAYER_ROLES)[number];
 
-export const OutfitResponseSchema = z.object({
-  outfits: z.array(OutfitSuggestionSchema).min(1).max(4),
-  notes: z.string().nullable(),
-});
+function normalizeLayerRole(input: unknown): LayerRole {
+  const v = String(input ?? "").toLowerCase().trim();
+  if ((VALID_LAYER_ROLES as readonly string[]).includes(v as LayerRole)) {
+    return v as LayerRole;
+  }
+  const synonyms: Record<string, LayerRole> = {
+    upper: "top",
+    shirt: "top",
+    tee: "top",
+    topwear: "top",
+    lower: "bottom",
+    bottomwear: "bottom",
+    pant: "bottom",
+    pants: "bottom",
+    outerwear: "layer",
+    outer: "layer",
+    jacket: "layer",
+    shoes: "footwear",
+    sneaker: "footwear",
+    sneakers: "footwear",
+    boots: "footwear",
+    accessory: "accessory",
+    accessorys: "accessory",
+    accessories: "accessory",
+    hat: "accessory",
+    belt: "accessory",
+    bag: "accessory",
+    watch: "accessory",
+  };
+  return synonyms[v] ?? "top";
+}
 
-export type OutfitSuggestion = z.infer<typeof OutfitSuggestionSchema>;
-export type OutfitResponse = z.infer<typeof OutfitResponseSchema>;
+export const OutfitItemRefSchema = z
+  .object({
+    garment_id: z.string().default(""),
+    layer_role: z.string().default("top"),
+  })
+  .transform((data) => ({
+    garment_id: data.garment_id,
+    layer_role: normalizeLayerRole(data.layer_role),
+  }));
+
+export const OutfitSuggestionSchema = z
+  .object({
+    title: z.string().default("Untitled outfit"),
+    garments: z.array(z.unknown()).default([]),
+    explanation: z.string().default(""),
+    formality: z.union([z.number(), z.string()]).default(2),
+  })
+  .transform((data) => {
+    // Normalize garments — each item may come in many shapes
+    const garments = data.garments
+      .map((g) => {
+        if (!g || typeof g !== "object") return null;
+        const obj = g as Record<string, unknown>;
+        const garmentId =
+          (typeof obj.garment_id === "string" && obj.garment_id) ||
+          (typeof obj.id === "string" && obj.id) ||
+          (typeof obj.garmentId === "string" && obj.garmentId) ||
+          "";
+        const rawRole =
+          obj.layer_role ?? obj.role ?? obj.type ?? obj.layer ?? "top";
+        return {
+          garment_id: garmentId,
+          layer_role: normalizeLayerRole(rawRole),
+        };
+      })
+      .filter(
+        (g): g is { garment_id: string; layer_role: LayerRole } =>
+          g !== null && g.garment_id !== "",
+      );
+
+    // Normalize formality to 0-5 integer
+    const formalityNum =
+      typeof data.formality === "number"
+        ? data.formality
+        : parseFloat(String(data.formality));
+    const formality = Number.isFinite(formalityNum)
+      ? Math.max(0, Math.min(5, Math.round(formalityNum)))
+      : 2;
+
+    return {
+      title: data.title || "Untitled outfit",
+      garments,
+      explanation: data.explanation,
+      formality,
+    };
+  });
+
+export const OutfitResponseSchema = z
+  .object({
+    outfits: z.array(z.unknown()).default([]),
+    notes: z.string().nullable().default(null),
+  })
+  .transform((data) => {
+    // Coerce each outfit to the canonical shape via OutfitSuggestionSchema
+    const outfits = data.outfits
+      .map((o) => {
+        if (!o || typeof o !== "object") return null;
+        // OutfitSuggestionSchema is permissive but we need to validate via
+        // safeParse so we can skip invalid ones
+        const result = OutfitSuggestionSchema.safeParse(o);
+        if (result.success) return result.data;
+        return null;
+      })
+      .filter((o): o is {
+        title: string;
+        garments: Array<{ garment_id: string; layer_role: LayerRole }>;
+        explanation: string;
+        formality: number;
+      } => o !== null);
+    return {
+      outfits,
+      notes: data.notes,
+    };
+  });
+
+export type OutfitSuggestion = {
+  title: string;
+  garments: Array<{ garment_id: string; layer_role: LayerRole }>;
+  explanation: string;
+  formality: number;
+};
+
+export type OutfitResponse = {
+  outfits: OutfitSuggestion[];
+  notes: string | null;
+};
 
 // =====================================================
 // REFERENCE analysis schema
