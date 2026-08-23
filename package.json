@@ -15,6 +15,7 @@
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
     "@imgly/background-removal": "^1.7.0",
+    "@imgly/background-removal-data": "^1.4.5",
     "@sentry/nextjs": "^10.70.0",
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.3",

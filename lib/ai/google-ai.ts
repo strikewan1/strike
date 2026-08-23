@@ -40,15 +40,39 @@ if (!GOOGLE_AI_API_KEY) {
 }
 
 /**
- * Fallback chain — when a model returns 404 (deprecated/unavailable),
- * try the next one in the list. This saved us once already when Google
- * silently deprecated gemini-2.0-flash.
- *
- * The chain starts with the configured default and ends with cheap
- * lightweight fallbacks.
+ * Models that Google has deprecated (return 404). We skip these
+ * automatically even if the user has them configured.
  */
-const MODEL_FALLBACKS = [
-  // Configured defaults
+const DEPRECATED_MODELS = new Set([
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-exp",
+  "gemini-2.0-flash-lite",
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-latest",
+  "gemini-1.5-pro",
+  "gemini-1.5-pro-latest",
+]);
+
+function warnIfDeprecated(label: string, model: string) {
+  if (DEPRECATED_MODELS.has(model)) {
+    console.warn(
+      `[GoogleAI] ${label}=${model} is DEPRECATED by Google and returns 404. ` +
+        `Change to gemini-2.5-flash (or gemini-flash-latest) in Vercel env vars.`,
+    );
+  }
+}
+
+warnIfDeprecated("GOOGLE_AI_VISION_MODEL", VISION_MODEL);
+warnIfDeprecated("GOOGLE_AI_TEXT_MODEL", TEXT_MODEL);
+
+/**
+ * Fallback chain — when a model returns 404 (deprecated/unavailable),
+ * try the next one in the list. We DEDUPLICATE and SKIP DEPRECATED
+ * models automatically so the chain never tries the same model twice
+ * or a model Google has already shut off.
+ */
+const MODEL_FALLBACKS_RAW = [
+  // Configured defaults (already validated above)
   VISION_MODEL,
   TEXT_MODEL,
   // Recent stable aliases — Google keeps these pointing at the latest
@@ -57,7 +81,12 @@ const MODEL_FALLBACKS = [
   "gemini-flash-lite-latest",
   // Older stable that may still be available
   "gemini-2.5-flash-lite",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
 ];
+const MODEL_FALLBACKS = Array.from(
+  new Set(MODEL_FALLBACKS_RAW),
+).filter((m) => !DEPRECATED_MODELS.has(m));
 
 /**
  * Detects whether an error indicates the model is missing/deprecated.

@@ -17,28 +17,46 @@ Sneakers are part of the styling system. The user is a sneakerhead with Air Jord
 export const RECOGNIZE_GARMENT_PROMPT = (imageBase64: string) => [
   {
     role: "system" as const,
-    content: `You are an expert personal stylist and image classifier specializing in contemporary menswear with deep knowledge of Japanese fashion (Amekaji, City Boy, Ura-Harajuku) and sneaker culture.
+    content: `You analyze a clothing item from a photo and return a single JSON object.
 
-You will receive an image of a single garment. Analyze it carefully and respond with STRICT JSON only — no prose, no markdown fences.
+# Output schema (use these EXACT field names, no others):
 
-Rules:
-- Be specific with subcategory. If unsure, pick the closest match from typical menswear vocabulary.
-- For fit: tops → one of slim, regular, relaxed, boxy, oversized, cropped, longline. Bottoms → one of skinny, slim, straight, relaxed, wide, tapered, cropped.
-- Color names should be simple (white, navy, olive, indigo, ecru, charcoal, beige, black, grey, brown, tan, etc.).
-- Brand should only be guessed if clearly visible (logo, tag, label). Otherwise null.
-- Sneakers: provide model_guess (e.g. "Air Jordan 3", "Nike Dunk Low Panda"), colorway, silhouette, and prominence.
-- Prominence levels: neutral (easy to combine), icon (recognizable but versatile), statement (must lead the outfit).
-- Formality 0–5: 0 = very casual (tee + shorts), 5 = formal (suit).
-- Style tags should reference Amekaji, City Boy, workwear, ivy, military, streetwear, minimal, creative_executive, etc.
-- Seasons: spring, summer, fall, winter — pick all that apply.
-- If confidence is low, mention it in confidence_notes.`,
+{
+  "kind": "garment" | "sneaker" | "accessory",
+  "category": "top" | "bottom" | "outerwear" | "footwear" | "accessory",
+  "subcategory": "<short snake_case label>",
+  "fit": "<one of: slim, regular, relaxed, boxy, oversized, cropped, longline, null>",
+  "primary_color": "<simple color name like navy, white, indigo>",
+  "secondary_colors": ["<color>", "<color>"],
+  "pattern": "<solid, striped, plaid, graphic, denim, etc.>",
+  "material": "<cotton, denim, wool, etc., or null>",
+  "seasons": ["<spring|summer|fall|winter|all>"],
+  "formality": <integer 0-5>,
+  "style_tags": ["<amekaji|workwear|cityboy|ivy|streetwear|minimal|...>"],
+  "brand_guess": "<brand name or null>",
+  "sneaker": null or {
+    "model_guess": "<e.g. Air Jordan 3, Nike Dunk Low>",
+    "colorway": "<colorway name>",
+    "silhouette": "<shoe silhouette>",
+    "prominence": "neutral" | "icon" | "statement"
+  },
+  "confidence_notes": "<short string or null>"
+}
+
+# Rules:
+- "kind": use "sneaker" for any athletic shoe; "accessory" for hats, belts, bags, watches, jewelry; "garment" otherwise.
+- "category": "footwear" only for dress shoes/boots; use "sneaker" kind for sneakers.
+- "seasons": pick all applicable. Use "all" if truly year-round.
+- "formality": 0 = very casual, 5 = formal suit.
+- "confidence_notes": say "low confidence" if image is unclear; null otherwise.
+- Output ONLY the JSON object, no markdown fences, no preamble, no explanation outside the JSON.`,
   },
   {
     role: "user" as const,
     content: [
       {
         type: "text" as const,
-        text: "Analyze this garment and respond with JSON only.",
+        text: "Analyze this garment and return the JSON object exactly as specified.",
       },
       {
         type: "image_url" as const,

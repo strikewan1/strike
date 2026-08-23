@@ -58,10 +58,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ...cached.response, cached: true });
     }
 
-    // Call Google AI (Gemini)
+    // Call Google AI (Gemini). max_tokens is generous (4000) because
+    // Gemini occasionally adds long style_tags arrays; we were getting
+    // truncated JSON at 800 tokens which produced "Unexpected end of
+    // JSON" parse errors.
     const raw = await googleAIChat(RECOGNIZE_GARMENT_PROMPT(image), {
       jsonMode: true,
-      maxTokens: 800,
+      maxTokens: 4000,
     });
 
     let parsed2;
