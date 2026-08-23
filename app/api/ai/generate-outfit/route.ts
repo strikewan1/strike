@@ -128,7 +128,10 @@ export async function POST(req: NextRequest) {
       );
       return NextResponse.json(
         {
-          error: "AI returned unparseable response. Try again.",
+          error:
+            `Gemini returned an unparseable response. ` +
+            `Details: ${parseErr instanceof Error ? parseErr.message : "unknown"}. ` +
+            `Try again — this is usually a transient issue.`,
           raw: raw.slice(0, 500),
         },
         { status: 502 },
@@ -146,8 +149,12 @@ export async function POST(req: NextRequest) {
       );
       return NextResponse.json(
         {
-          error: "AI returned invalid response. Try again.",
+          error:
+            `Gemini returned a response that doesn't match our schema. ` +
+            `Details: ${JSON.stringify(parsed2.error.flatten().fieldErrors)}. ` +
+            `Try again — this is usually a transient issue.`,
           details: parsed2.error.flatten(),
+          raw: raw.slice(0, 500),
         },
         { status: 502 },
       );
