@@ -236,7 +236,11 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
         );
         console.log("[upload] step=sign-url-original OK path=", origSigned.path);
         await putToSignedUrl(origSigned.signedUrl, originalBlob);
-        originalUrl = origSigned.publicUrl;
+        // Prefer the long-lived signed download URL. Fall back to the
+        // /public/... URL if the server didn't include it (older route).
+        originalUrl =
+          (origSigned as { signedDownloadUrl?: string }).signedDownloadUrl ??
+          origSigned.publicUrl;
         console.log("[upload] step=put-original OK url=", originalUrl);
       } catch (err) {
         console.error("[upload] step=upload-original FAILED:", err);
@@ -263,7 +267,9 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
         );
         console.log("[upload] step=sign-url-cleaned OK path=", cleanSigned.path);
         await putToSignedUrl(cleanSigned.signedUrl, cleanedBlob);
-        cleanedUrl = cleanSigned.publicUrl;
+        cleanedUrl =
+          (cleanSigned as { signedDownloadUrl?: string }).signedDownloadUrl ??
+          cleanSigned.publicUrl;
         console.log("[upload] step=put-cleaned OK url=", cleanedUrl);
       } catch (err) {
         console.error("[upload] step=upload-cleaned FAILED:", err);
