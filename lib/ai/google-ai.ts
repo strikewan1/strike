@@ -215,19 +215,33 @@ async function chatWithModel(
         };
       };
       const errType = parsed.error?.type;
-      const errMsg = parsed.error?.message;
+      const errMsg = parsed.error?.message ?? "";
+      const errMsgLower = errMsg.toLowerCase();
       if (
         res.status === 401 ||
         errType === "invalid_request_error" ||
-        (errMsg?.toLowerCase().includes("api key") ?? false)
+        errMsgLower.includes("api key")
       ) {
         friendly = `GoogleAI API key inválida o sin permisos. Revisá GOOGLE_AI_API_KEY en Vercel env vars.`;
       } else if (res.status === 429 || errType === "rate_limit_error") {
-        friendly = `GoogleAI rate limit alcanzado. Esperá 1-2 minutos.`;
-        isRetryable = true;
+        // Distinguish rate-limit-per-minute (transient, retry works)
+        // from free-tier-quota-exceeded (need a paid API key, retry
+        // doesn't help). Google's error message mentions "free_tier"
+        // for the latter.
+        if (errMsgLower.includes("free_tier") || errMsgLower.includes("quota")) {
+          friendly =
+            `GoogleAI quota exceeded on free tier. Aunque tengas billing ` +
+            `habilitado en AI Studio, tu API key actual sigue en tier free. ` +
+            `Creá una NUEVA key en https://aistudio.google.com/app/apikey ` +
+            `(después de habilitar billing) y actualizá GOOGLE_AI_API_KEY en Vercel.`;
+          isRetryable = false; // retries won't help against a hard quota
+        } else {
+          friendly = `GoogleAI rate limit alcanzado. Esperá 1-2 minutos.`;
+          isRetryable = true;
+        }
       } else if (
         res.status === 404 ||
-        errMsg?.toLowerCase().includes("no longer available")
+        errMsgLower.includes("no longer available")
       ) {
         // Include the model name so users/devs know which fallback chain failed
         friendly = `Modelo ${model} no disponible (404): ${errMsg ?? "model not found"}`;
