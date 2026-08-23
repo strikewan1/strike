@@ -167,36 +167,136 @@ export const STYLE_TAGS = [
   "earth_tones",
 ] as const;
 
-export const RecognizedGarmentSchema = z.object({
-  kind: z.enum(["garment", "sneaker", "accessory"]),
-  category: z.enum(GARMENT_CATEGORIES),
-  subcategory: z.string(),
-  fit: z.string().nullable(),
-  primary_color: z.string(),
-  secondary_colors: z.array(z.string()).default([]),
-  // Pattern/material use free-form strings rather than enums because
-  // Google Gemini occasionally returns values outside our enum (e.g.,
-  // "polka_dot", "sequin", "nylon_blend"). Coercing to the closest match
-  // adds complexity; we just store what the model said and the user
-  // can correct it in the confirm step.
-  pattern: z.string().default("solid"),
-  material: z.string().nullable(),
-  seasons: z.array(
-    z.enum(["spring", "summer", "fall", "winter", "all"]),
-  ),
-  formality: z.number().int().min(0).max(5),
-  style_tags: z.array(z.string()).default([]),
-  brand_guess: z.string().nullable(),
-  sneaker: z
-    .object({
-      model_guess: z.string().nullable(),
-      colorway: z.string().nullable(),
-      silhouette: z.string().nullable(),
-      prominence: z.enum(["neutral", "icon", "statement"]).nullable(),
-    })
-    .nullable(),
-  confidence_notes: z.string().nullable(),
-});
+// Helper: normalize Gemini's free-text category into our canonical 5.
+// Gemini often returns things like "shirt", "tee", "tshirt" for category,
+// but our schema only knows "top". Map common synonyms here.
+function normalizeCategory(input: string): (typeof GARMENT_CATEGORIES)[number] {
+  const v = (input ?? "").toLowerCase().trim();
+  if (!v) return "top";
+  // Exact match
+  if ((GARMENT_CATEGORIES as readonly string[]).includes(v)) {
+    return v as (typeof GARMENT_CATEGORIES)[number];
+  }
+  // Synonym map
+  const synonyms: Record<string, (typeof GARMENT_CATEGORIES)[number]> = {
+    shirt: "top",
+    tshirt: "top",
+    "t-shirt": "top",
+    tee: "top",
+    sweater: "top",
+    hoodie: "top",
+    pants: "bottom",
+    trousers: "bottom",
+    jeans: "bottom",
+    shorts: "bottom",
+    coat: "outerwear",
+    jacket: "outerwear",
+    shoes: "footwear",
+    sneakers: "footwear",
+    boots: "footwear",
+    hat: "accessory",
+    belt: "accessory",
+    bag: "accessory",
+    watch: "accessory",
+  };
+  return synonyms[v] ?? "top";
+}
+
+function normalizeKind(input: string): "garment" | "sneaker" | "accessory" {
+  const v = (input ?? "").toLowerCase().trim();
+  if (v === "garment" || v === "sneaker" || v === "accessory") return v;
+  // Sneakers are technically footwear but we want them classified as
+  // their own kind for the sneaker-specific UI in the closet.
+  if (v.includes("sneaker") || v.includes("shoe")) return "sneaker";
+  if (v.includes("accessory") || v.includes("watch") || v.includes("belt")) return "accessory";
+  return "garment";
+}
+
+function normalizeFormality(input: unknown): number {
+  const n = typeof input === "number" ? input : parseFloat(String(input));
+  if (Number.isFinite(n)) return Math.max(0, Math.min(5, Math.round(n)));
+  return 2;
+}
+
+const VALID_SEASONS = ["spring", "summer", "fall", "winter", "all"] as const;
+
+function normalizeSeasons(input: unknown): Array<(typeof VALID_SEASONS)[number]> {
+  if (!Array.isArray(input)) return [];
+  const result: Array<(typeof VALID_SEASONS)[number]> = [];
+  for (const v of input) {
+    const s = String(v ?? "").toLowerCase().trim();
+    if ((VALID_SEASONS as readonly string[]).includes(s)) {
+      result.push(s as (typeof VALID_SEASONS)[number]);
+    }
+  }
+  return result;
+}
+
+// Permissive schema — accept any string from Gemini and normalize later.
+// We use defaults everywhere so even a partial/empty response still
+// validates. Gemini 2.5 occasionally returns values outside our enum
+// (e.g., "polka_dot", "shirt" for category, "springtime" for season)
+// and Zod's strict enums were rejecting the whole response.
+export const RecognizedGarmentSchema = z
+  .object({
+    kind: z.string().default("garment"),
+    category: z.string().default("top"),
+    subcategory: z.string().default(""),
+    fit: z.string().nullable().default(null),
+    primary_color: z.string().default("unknown"),
+    secondary_colors: z.array(z.string()).default([]),
+    pattern: z.string().default("solid"),
+    material: z.string().nullable().default(null),
+    seasons: z.array(z.string()).default([]),
+    formality: z.union([z.number(), z.string()]).default(2),
+    style_tags: z.array(z.string()).default([]),
+    brand_guess: z.string().nullable().default(null),
+    sneaker: z
+      .object({
+        model_guess: z.string().nullable().optional(),
+        colorway: z.string().nullable().optional(),
+        silhouette: z.string().nullable().optional(),
+        prominence: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    confidence_notes: z.string().nullable().default(null),
+  })
+  // Normalize after parse — we still validate shape (it's an object with
+  // strings/arrays) but map Gemini's free-text values to our canonical
+  // enums below.
+  .transform((data) => ({
+    kind: normalizeKind(data.kind),
+    category: normalizeCategory(data.category),
+    subcategory: data.subcategory,
+    fit: data.fit,
+    primary_color: data.primary_color,
+    secondary_colors: data.secondary_colors,
+    pattern: data.pattern,
+    material: data.material,
+    seasons: normalizeSeasons(data.seasons),
+    formality: normalizeFormality(data.formality),
+    style_tags: data.style_tags,
+    brand_guess: data.brand_guess,
+    sneaker: data.sneaker
+      ? {
+          model_guess: data.sneaker.model_guess ?? null,
+          colorway: data.sneaker.colorway ?? null,
+          silhouette: data.sneaker.silhouette ?? null,
+          prominence: data.sneaker.prominence
+            ? (["neutral", "icon", "statement"].includes(
+                String(data.sneaker.prominence),
+              )
+                ? (String(data.sneaker.prominence) as
+                    | "neutral"
+                    | "icon"
+                    | "statement")
+                : null)
+            : null,
+        }
+      : null,
+    confidence_notes: data.confidence_notes,
+  }));
 
 export type RecognizedGarment = z.infer<typeof RecognizedGarmentSchema>;
 
