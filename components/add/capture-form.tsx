@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { createClient } from "@/lib/supabase/client";
 import {
   blobToDataUrl,
   preloadRemovalModel,
@@ -113,7 +114,13 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
     fileName: string,
     contentType: string,
     blobForMagicBytes: Blob,
-  ): Promise<{ signedUrl: string; path: string; publicUrl: string }> => {
+  ): Promise<{
+    signedUrl: string;
+    path: string;
+    token: string;
+    publicUrl: string;
+    signedDownloadUrl: string;
+  }> => {
     const headerBuf = await blobForMagicBytes.slice(0, 16).arrayBuffer();
     const headerBytes = new Uint8Array(headerBuf);
     const headerHex = Array.from(headerBytes)
@@ -151,32 +158,30 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
   };
 
   // Helper: PUT a blob to a signed URL.
+  // Uses Supabase's native uploadToSignedUrl() which handles all the
+  // header/auth edge cases. Raw fetch PUT to the signedUrl was failing
+  // with "Object not found" because Supabase's signing format includes
+  // auth requirements the raw fetch couldn't satisfy.
   const putToSignedUrl = async (
-    signedUrl: string,
+    bucket: string,
+    path: string,
+    token: string,
     blob: Blob,
   ): Promise<void> => {
     console.log(
-      "[upload] PUT signedUrl size=", blob.size,
+      "[upload] uploadToSignedUrl bucket=", bucket,
+      "path=", path, "size=", blob.size,
       "type=", blob.type,
-      "urlHost=", new URL(signedUrl).host,
     );
-    let r: Response;
-    try {
-      r = await fetch(signedUrl, {
-        method: "PUT",
-        headers: { "Content-Type": blob.type },
-        body: blob,
-        cache: "no-store",
+    const supabase = createClient();
+    const { error } = await supabase.storage
+      .from(bucket)
+      .uploadToSignedUrl(path, token, blob, {
+        contentType: blob.type,
       });
-    } catch (networkErr) {
-      console.error("[upload] PUT network error:", networkErr);
-      throw new Error(
-        `Network error uploading: ${networkErr instanceof Error ? networkErr.message : "unknown"}`,
-      );
-    }
-    if (!r.ok) {
-      const text = await r.text().catch(() => "");
-      throw new Error(`Upload failed: HTTP ${r.status} ${text.slice(0, 200)}`);
+    if (error) {
+      console.error("[upload] uploadToSignedUrl error:", error);
+      throw new Error(error.message ?? "Upload failed");
     }
   };
 
@@ -235,7 +240,7 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
           originalBlob,
         );
         console.log("[upload] step=sign-url-original OK path=", origSigned.path);
-        await putToSignedUrl(origSigned.signedUrl, originalBlob);
+        await putToSignedUrl("garments", origSigned.path, origSigned.token, originalBlob);
         // Prefer the long-lived signed download URL. Fall back to the
         // /public/... URL if the server didn't include it (older route).
         originalUrl =
@@ -266,7 +271,7 @@ export function CaptureForm({ source }: { source: "camera" | "gallery" }) {
           cleanedBlob,
         );
         console.log("[upload] step=sign-url-cleaned OK path=", cleanSigned.path);
-        await putToSignedUrl(cleanSigned.signedUrl, cleanedBlob);
+        await putToSignedUrl("garments", cleanSigned.path, cleanSigned.token, cleanedBlob);
         cleanedUrl =
           (cleanSigned as { signedDownloadUrl?: string }).signedDownloadUrl ??
           cleanSigned.publicUrl;
