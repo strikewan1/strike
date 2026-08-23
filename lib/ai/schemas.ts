@@ -651,33 +651,45 @@ export const OutfitSuggestionSchema = z
     };
   });
 
-export const OutfitResponseSchema = z
-  .object({
+/**
+ * Zod union where one branch is an object and the other is an array.
+ * We accept both shapes because Gemini sometimes returns a bare array
+ * [{...outfits...}] instead of { outfits: [...], notes: "..." }.
+ */
+const ObjectOrArray = z.union([
+  z.object({
     outfits: z.array(z.unknown()).default([]),
     notes: z.string().nullable().default(null),
-  })
-  .transform((data) => {
-    // Coerce each outfit to the canonical shape via OutfitSuggestionSchema
-    const outfits = data.outfits
-      .map((o) => {
-        if (!o || typeof o !== "object") return null;
-        // OutfitSuggestionSchema is permissive but we need to validate via
-        // safeParse so we can skip invalid ones
-        const result = OutfitSuggestionSchema.safeParse(o);
-        if (result.success) return result.data;
-        return null;
-      })
-      .filter((o): o is {
-        title: string;
-        garments: Array<{ garment_id: string; layer_role: LayerRole }>;
-        explanation: string;
-        formality: number;
-      } => o !== null);
-    return {
-      outfits,
-      notes: data.notes,
-    };
-  });
+  }),
+  z.array(z.unknown()).default([]),
+]);
+
+export const OutfitResponseSchema = ObjectOrArray.transform((data) => {
+  // data might be an object { outfits, notes } or a bare array [...]
+  const rawList = Array.isArray(data)
+    ? (data as unknown[])
+    : ((data as { outfits?: unknown[] }).outfits ?? []);
+  const notes = Array.isArray(data)
+    ? null
+    : ((data as { notes?: string | null }).notes ?? null);
+
+  const outfits = (rawList as unknown[])
+    .map((o: unknown) => {
+      if (!o || typeof o !== "object") return null;
+      // OutfitSuggestionSchema is permissive but we need to validate via
+      // safeParse so we can skip invalid ones
+      const result = OutfitSuggestionSchema.safeParse(o);
+      if (result.success) return result.data;
+      return null;
+    })
+    .filter((o): o is {
+      title: string;
+      garments: Array<{ garment_id: string; layer_role: LayerRole }>;
+      explanation: string;
+      formality: number;
+    } => o !== null);
+  return { outfits, notes };
+});
 
 export type OutfitSuggestion = {
   title: string;

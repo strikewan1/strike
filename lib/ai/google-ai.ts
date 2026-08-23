@@ -122,6 +122,18 @@ function isRetryable(err: unknown): boolean {
 /** Sleep helper — small wrapper so tests can stub it. */
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Parse Google's rate-limit retry-after hint from the error body.
+ * Returns seconds (rounded up) or null if not parseable.
+ * Google's messages look like "Please retry in 10.835577176s."
+ */
+function parseRetryAfterSeconds(err: Error): number | null {
+  const match = err.message.match(/retry in (\d+(?:\.\d+)?)s/i);
+  if (!match) return null;
+  const seconds = parseFloat(match[1]);
+  return Number.isFinite(seconds) ? Math.ceil(seconds) : null;
+}
+
 interface ChatMessage {
   role: "system" | "user" | "assistant";
   content:
@@ -292,11 +304,22 @@ export async function googleAIChat(
           throw err;
         }
 
-        // Retryable: backoff if there are attempts left
+        // Retryable: backoff if there are attempts left. Honor Google's
+        // retry-after hint when present (e.g. "retry in 10s") — 1.2s for
+        // a 10s rate-limit window just hits the limit again immediately.
         if (attempt < maxAttempts) {
-          const backoffMs = 1200;
+          const retryAfter =
+            err instanceof Error ? parseRetryAfterSeconds(err) : null;
+          const backoffMs =
+            retryAfter !== null
+              ? retryAfter * 1000 + 500 // small buffer past the stated wait
+              : 1200;
           console.warn(
-            `[GoogleAI] model ${candidate} returned retryable error, retrying in ${backoffMs}ms (attempt ${attempt}/${maxAttempts})`,
+            `[GoogleAI] model ${candidate} returned retryable error, ` +
+              (retryAfter !== null
+                ? `waiting ${retryAfter}s as suggested by API`
+                : `retrying in ${backoffMs}ms`) +
+              ` (attempt ${attempt}/${maxAttempts})`,
           );
           await sleep(backoffMs);
           continue;
