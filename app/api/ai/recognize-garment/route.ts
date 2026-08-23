@@ -6,6 +6,13 @@ import { RECOGNIZE_GARMENT_PROMPT } from "@/lib/ai/prompts";
 import { RecognizedGarmentSchema } from "@/lib/ai/schemas";
 import { checkRateLimit, LIMITS, rateLimitResponse } from "@/lib/rate-limit";
 
+// Allow up to 60s for the function. The fallback chain can iterate
+// several models with retries, so we need the headroom. Vercel Hobby
+// defaults to 10s which would kill the request mid-fallback.
+// On Vercel Pro this is fine; on Hobby, Vercel still allows up to 60s
+// for streaming/non-streaming responses when the route sets maxDuration.
+export const maxDuration = 60;
+
 const BodySchema = z.object({
   image: z.string().min(100), // base64 data URL
   mimeType: z.string().default("image/jpeg"),
@@ -51,19 +58,47 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ...cached.response, cached: true });
     }
 
-    // Call MiniMax
+    // Call Google AI (Gemini)
     const raw = await googleAIChat(RECOGNIZE_GARMENT_PROMPT(image), {
       jsonMode: true,
       maxTokens: 800,
     });
 
-    const parsed2 = RecognizedGarmentSchema.safeParse(parseJsonSafe(raw));
-    if (!parsed2.success) {
+    let parsed2;
+    try {
+      parsed2 = RecognizedGarmentSchema.safeParse(parseJsonSafe(raw));
+    } catch (parseErr) {
+      // parseJsonSafe threw — most likely "Empty response" or unparseable JSON
+      console.error(
+        "[recognize-garment] JSON parse failed:",
+        parseErr instanceof Error ? parseErr.message : parseErr,
+      );
+      console.error(
+        "[recognize-garment] raw from Gemini (first 500 chars):",
+        raw.slice(0, 500),
+      );
       return NextResponse.json(
         {
-          error: "AI returned invalid response",
+          error: "AI returned unparseable response. Try again.",
+          raw: raw.slice(0, 500),
+        },
+        { status: 502 },
+      );
+    }
+
+    if (!parsed2.success) {
+      console.error(
+        "[recognize-garment] Zod validation failed:",
+        JSON.stringify(parsed2.error.flatten()),
+      );
+      console.error(
+        "[recognize-garment] raw from Gemini (first 500 chars):",
+        raw.slice(0, 500),
+      );
+      return NextResponse.json(
+        {
+          error: "AI returned invalid response. You can correct the values manually.",
           details: parsed2.error.flatten(),
-          raw,
         },
         { status: 502 },
       );
@@ -75,7 +110,7 @@ export async function POST(req: NextRequest) {
     await supabase.from("ai_cache").insert({
       image_hash: hash,
       response: result,
-      model: process.env.GOOGLE_AI_VISION_MODEL ?? "gemini-2.0-flash",
+      model: process.env.GOOGLE_AI_VISION_MODEL ?? "gemini-2.5-flash",
     });
 
     return NextResponse.json(result);

@@ -174,8 +174,13 @@ export const RecognizedGarmentSchema = z.object({
   fit: z.string().nullable(),
   primary_color: z.string(),
   secondary_colors: z.array(z.string()).default([]),
-  pattern: z.enum(PATTERNS).default("solid"),
-  material: z.enum(MATERIALS).nullable(),
+  // Pattern/material use free-form strings rather than enums because
+  // Google Gemini occasionally returns values outside our enum (e.g.,
+  // "polka_dot", "sequin", "nylon_blend"). Coercing to the closest match
+  // adds complexity; we just store what the model said and the user
+  // can correct it in the confirm step.
+  pattern: z.string().default("solid"),
+  material: z.string().nullable(),
   seasons: z.array(
     z.enum(["spring", "summer", "fall", "winter", "all"]),
   ),

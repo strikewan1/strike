@@ -233,9 +233,10 @@ export async function googleAIChat(
   let lastError: unknown;
 
   for (const candidate of candidates) {
-    // Per-candidate retry: up to 2 attempts with 1.5s backoff for
-    // retryable errors. After 2 failed attempts on one model, give
-    // up on it and move to the next.
+    // Per-candidate retry: 1 retry with 1.2s backoff for retryable
+    // errors. Keep it tight so total request time stays well under
+    // Vercel's maxDuration budget — too many retries would cause the
+    // edge to kill the request before all fallbacks get a chance.
     const maxAttempts = 2;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -258,7 +259,7 @@ export async function googleAIChat(
 
         // Retryable: backoff if there are attempts left
         if (attempt < maxAttempts) {
-          const backoffMs = 1500;
+          const backoffMs = 1200;
           console.warn(
             `[GoogleAI] model ${candidate} returned retryable error, retrying in ${backoffMs}ms (attempt ${attempt}/${maxAttempts})`,
           );
@@ -282,15 +283,31 @@ export async function googleAIChat(
   );
 }
 
-// Parse JSON safely. Strips markdown fences if model ignores instructions.
+// Parse JSON safely. Strips markdown fences if model ignores instructions,
+// and extracts the first {...} block if the model added a preamble
+// (e.g., "Here is the JSON:\n{...}"). Tolerant of model variations.
 export function parseJsonSafe<T>(raw: string): T {
+  if (!raw || !raw.trim()) {
+    throw new Error("Empty response from AI");
+  }
   const cleaned = raw
     .trim()
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/```\s*$/i, "")
     .trim();
-  return JSON.parse(cleaned) as T;
+
+  // Try direct parse first
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    // Fallback: extract first {...} block (handles "Here is the JSON: {..}" preambles)
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      return JSON.parse(match[0]) as T;
+    }
+    throw new Error(`Could not parse JSON from AI response: ${cleaned.slice(0, 120)}…`);
+  }
 }
 
 export function bufferHash(buf: Buffer | Uint8Array): string {
