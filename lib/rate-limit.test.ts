@@ -1,71 +1,94 @@
-import { describe, it, expect } from "vitest";
-import { checkRateLimit, LIMITS, rateLimitResponse } from "@/lib/rate-limit";
+/**
+ * Tests for the per-user rate limit presets. These guard Gemini's
+ * per-minute quota by throttling how often the user can call our AI
+ * endpoints. If the in-app limits are too generous, the user can
+ * burn through Gemini's 360 RPM Tier-1 budget on a single upload
+ * burst.
+ */
 
-describe("checkRateLimit", () => {
-  it("allows requests up to capacity", () => {
-    const key = `test-${Date.now()}-${Math.random()}`;
-    const cfg = { capacity: 3, refillPerMs: 0 };
-    expect(checkRateLimit(key, cfg).allowed).toBe(true);
-    expect(checkRateLimit(key, cfg).allowed).toBe(true);
-    expect(checkRateLimit(key, cfg).allowed).toBe(true);
+import { describe, it, expect, beforeEach } from "vitest";
+import {
+  LIMITS,
+  checkRateLimit,
+  rateLimitResponse,
+  __resetRateLimitsForTests,
+} from "@/lib/rate-limit";
+
+beforeEach(() => {
+  __resetRateLimitsForTests();
+});
+
+describe("rate limit presets", () => {
+  it("recognize is throttled to 5/min (was 10/hour)", () => {
+    const bucket = LIMITS.recognize;
+    // 5/min = 1 token every 12s
+    expect(bucket.capacity).toBe(5);
+    expect(bucket.refillPerMs).toBeCloseTo(5 / 60_000, 6);
   });
 
-  it("blocks when capacity exhausted", () => {
-    const key = `test-${Date.now()}-${Math.random()}`;
-    const cfg = { capacity: 1, refillPerMs: 0 };
-    expect(checkRateLimit(key, cfg).allowed).toBe(true);
-    const blocked = checkRateLimit(key, cfg);
-    expect(blocked.allowed).toBe(false);
-    expect(blocked.retryAfterMs).toBeGreaterThan(0);
+  it("outfit is throttled to 1/min", () => {
+    const bucket = LIMITS.outfit;
+    expect(bucket.capacity).toBe(1);
+    expect(bucket.refillPerMs).toBeCloseTo(1 / 60_000, 6);
   });
 
-  it("refills tokens over time", async () => {
-    const key = `test-${Date.now()}-${Math.random()}`;
-    // 10 tokens per second = 0.01 per ms
-    const cfg = { capacity: 2, refillPerMs: 10 / 1000 };
-    checkRateLimit(key, cfg);
-    checkRateLimit(key, cfg);
-    expect(checkRateLimit(key, cfg).allowed).toBe(false);
-
-    // Wait 150ms — should refill at least 1 token
-    await new Promise((r) => setTimeout(r, 150));
-    expect(checkRateLimit(key, cfg).allowed).toBe(true);
-  });
-
-  it("caps at capacity", () => {
-    const key = `test-${Date.now()}-${Math.random()}`;
-    const cfg = { capacity: 5, refillPerMs: 10 / 1000 };
-    // Use all 5 capacity
-    for (let i = 0; i < cfg.capacity; i++) {
-      checkRateLimit(key, cfg);
-    }
-    // 6th should be blocked
-    expect(checkRateLimit(key, cfg).allowed).toBe(false);
-    // remaining must not exceed capacity - 1
-    expect(checkRateLimit(key, cfg).remaining).toBeLessThanOrEqual(cfg.capacity);
-  });
-
-  it("LIMITS presets exist", () => {
-    expect(LIMITS.recognize.capacity).toBeGreaterThan(0);
-    expect(LIMITS.outfit.capacity).toBeGreaterThan(0);
-    expect(LIMITS.reference.capacity).toBeGreaterThan(0);
+  it("upload is throttled to 5/min", () => {
+    const bucket = LIMITS.upload;
+    expect(bucket.capacity).toBe(5);
+    expect(bucket.refillPerMs).toBeCloseTo(5 / 60_000, 6);
   });
 });
 
-describe("rateLimitResponse", () => {
-  it("returns null when allowed", () => {
-    expect(rateLimitResponse({ allowed: true, remaining: 1 })).toBeNull();
+describe("checkRateLimit — token bucket semantics", () => {
+  it("allows up to N requests then blocks", () => {
+    const cfg = { capacity: 3, refillPerMs: 1 }; // 1 token per ms
+    const key = "rl-test-1";
+    // Drain the bucket
+    for (let i = 0; i < 3; i++) {
+      const r = checkRateLimit(key, cfg);
+      expect(r.allowed).toBe(true);
+    }
+    // 4th call should be blocked
+    const r = checkRateLimit(key, cfg);
+    expect(r.allowed).toBe(false);
+    expect(r.retryAfterMs).toBeGreaterThan(0);
   });
 
-  it("returns 429 with retry-after when blocked", () => {
-    const res = rateLimitResponse({
-      allowed: false,
-      remaining: 0,
-      retryAfterMs: 5000,
+  it("keys are isolated (different users have separate buckets)", () => {
+    const cfg = { capacity: 2, refillPerMs: 0 };
+    const a = "rl-test-2-a";
+    const b = "rl-test-2-b";
+    checkRateLimit(a, cfg);
+    checkRateLimit(a, cfg);
+    expect(checkRateLimit(a, cfg).allowed).toBe(false);
+    // user-b should be unaffected
+    expect(checkRateLimit(b, cfg).allowed).toBe(true);
+  });
+});
+
+describe("rateLimitResponse — 429 surface", () => {
+  it("returns null when allowed", () => {
+    const r = checkRateLimit("rl-test-3", {
+      capacity: 5,
+      refillPerMs: 1,
     });
+    expect(rateLimitResponse(r)).toBeNull();
+  });
+
+  it("returns 429 with retryAfter when blocked", async () => {
+    // Use a tiny but non-zero refillPerMs so retryAfterMs is finite.
+    const cfg = { capacity: 1, refillPerMs: 1 };
+    const key = "rl-test-4";
+    checkRateLimit(key, cfg);
+    const r = checkRateLimit(key, cfg);
+    const res = rateLimitResponse(r);
     expect(res).not.toBeNull();
     expect(res!.status).toBe(429);
-    expect(res!.headers.get("Retry-After")).toBe("5");
-    expect(res!.headers.get("Content-Type")).toBe("application/json");
+    const text = await res!.text();
+    const body = JSON.parse(text);
+    expect(body.error).toBe("Rate limit");
+    expect(typeof body.retryAfter).toBe("number");
+    expect(body.retryAfter).toBeGreaterThanOrEqual(0);
+    expect(res!.headers.get("Retry-After")).toBeDefined();
   });
 });

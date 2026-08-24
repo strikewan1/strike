@@ -11,6 +11,14 @@ interface Bucket {
 
 const buckets = new Map<BucketKey, Bucket>();
 
+/**
+ * Test helper: clear all in-memory rate-limit buckets. Exported so
+ * tests can call between cases to prevent pollution.
+ */
+export function __resetRateLimitsForTests() {
+  buckets.clear();
+}
+
 interface LimitConfig {
   capacity: number; // max tokens
   refillPerMs: number; // tokens added per ms
@@ -66,16 +74,20 @@ export function checkRateLimit(
 
 // Convenience presets
 export const LIMITS = {
-  // 10 garment recognitions per hour
-  recognize: { capacity: 10, refillPerMs: 10 / (60 * 60 * 1000) },
-  // 3 outfit generations per minute — leaves headroom for Gemini's
-  // 360 RPM Tier-1 limit when multiple retries per request are
-  // accounted for.
-  outfit: { capacity: 3, refillPerMs: 3 / (60 * 1000) },
+  // 5 garment recognitions per minute. The previous 10/hour was too
+  // generous — bulk upload of 50 items would take 5+ hours, AND each
+  // recognize call costs 1-2 Gemini requests internally. With 5/min,
+  // 50 items takes 10 min, well within Gemini's Tier-1 (360 RPM) and
+  // the cooldown UI gives the user a clear "wait" signal.
+  recognize: { capacity: 5, refillPerMs: 5 / (60 * 1000) },
+  // 1 outfit generation per minute. Outfits are heavier requests and
+  // are typically generated once per session — 1/min is plenty.
+  outfit: { capacity: 1, refillPerMs: 1 / (60 * 1000) },
   // 20 reference analyses per hour
   reference: { capacity: 20, refillPerMs: 20 / (60 * 60 * 1000) },
-  // 10 uploads per minute (signed URL requests)
-  upload: { capacity: 10, refillPerMs: 10 / (60 * 1000) },
+  // 5 uploads per minute (signed URL requests) — 2 per garment
+  // (original + cleaned) so 5 garments take 2 min
+  upload: { capacity: 5, refillPerMs: 5 / (60 * 1000) },
 } as const;
 
 // Periodic cleanup to avoid memory bloat
