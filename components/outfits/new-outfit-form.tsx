@@ -40,6 +40,33 @@ function parseRetryAfter(message: string | undefined): number | null {
   return Number.isFinite(n) ? Math.max(1, Math.ceil(n)) : null;
 }
 
+// Cross-mount persistence: when Gemini rate-limits us, the cooldown
+// should outlive a navigation away and back so the user can't just
+// re-render to bypass the disabled button.
+const COOLDOWN_KEY = "strike:outfitCooldownUntil";
+
+function readCooldown(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(COOLDOWN_KEY);
+    if (!raw) return null;
+    const ts = Number(raw);
+    return Number.isFinite(ts) && ts > Date.now() ? ts : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCooldown(ts: number | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (ts) window.sessionStorage.setItem(COOLDOWN_KEY, String(ts));
+    else window.sessionStorage.removeItem(COOLDOWN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function NewOutfitForm() {
   const router = useRouter();
   const [occasion, setOccasion] = useState<string>("trabajo");
@@ -48,9 +75,22 @@ export function NewOutfitForm() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Cooldown timestamp (epoch ms) when to allow the next request.
-  // Displayed as a countdown on the submit button.
-  const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
-  const [secondsLeft, setSecondsLeft] = useState(0);
+  // Displayed as a countdown on the submit button. Persisted to
+  // sessionStorage so navigation between pages doesn't reset it.
+  const [cooldownUntil, setCooldownUntilState] = useState<number | null>(
+    () => readCooldown(),
+  );
+  const [secondsLeft, setSecondsLeft] = useState(() => {
+    const ts = readCooldown();
+    if (!ts) return 0;
+    return Math.max(0, Math.ceil((ts - Date.now()) / 1000));
+  });
+
+  // Wrapper that also persists to sessionStorage.
+  const setCooldownUntil = (ts: number | null) => {
+    setCooldownUntilState(ts);
+    writeCooldown(ts);
+  };
 
   // Tick down once per second while cooling down.
   useEffect(() => {
