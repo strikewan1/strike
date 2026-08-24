@@ -206,6 +206,8 @@ async function chatWithModel(
     const text = await res.text();
     let friendly = `GoogleAI error ${res.status}`;
     let isRetryable = false;
+    let errMsg = "";
+    let errMsgLower = "";
     try {
       const parsed = JSON.parse(text) as {
         error?: {
@@ -215,8 +217,8 @@ async function chatWithModel(
         };
       };
       const errType = parsed.error?.type;
-      const errMsg = parsed.error?.message ?? "";
-      const errMsgLower = errMsg.toLowerCase();
+      errMsg = parsed.error?.message ?? "";
+      errMsgLower = errMsg.toLowerCase();
       if (
         res.status === 401 ||
         errType === "invalid_request_error" ||
@@ -260,8 +262,21 @@ async function chatWithModel(
     }
     const sanitized = text.length > 500 ? text.slice(0, 500) + "…" : text;
     console.error(`[GoogleAI] ${res.status} ${model}: ${sanitized}`);
+    // Extract retry-after seconds from Google's message so the caller
+    // (e.g. /api/ai routes) can surface a precise 429 with Retry-After
+    // header to the client. Critical for per-minute rate limits where
+    // the user needs an accurate countdown.
+    const retryAfter =
+      isRetryable && errMsg && errMsg.toLowerCase().includes("retry in")
+        ? parseRetryAfterSeconds(new Error(errMsg))
+        : null;
     const err = new Error(friendly);
-    (err as Error & { retryable?: boolean }).retryable = isRetryable;
+    const tagged = err as Error & {
+      retryable?: boolean;
+      retryAfter?: number | null;
+    };
+    tagged.retryable = isRetryable;
+    tagged.retryAfter = retryAfter;
     throw err;
   }
 
@@ -298,7 +313,11 @@ export async function googleAIChat(
     // errors. Keep it tight so total request time stays well under
     // Vercel's maxDuration budget — too many retries would cause the
     // edge to kill the request before all fallbacks get a chance.
-    const maxAttempts = 2;
+    // 3 attempts = 1 initial + 2 retries. With per-minute rate limits
+    // Google often says "retry in 60s" — we wait that long, retry once,
+    // and if it fails again we move to the next model. Most rate-limit
+    // bursts clear within 1-2 retries of waiting through the window.
+    const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await chatWithModel(messages, options, candidate);

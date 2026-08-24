@@ -192,6 +192,25 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("[/api/ai/generate-outfit]", error);
+    // If the AI client threw a flagged "retryable" error (429/503/529),
+    // surface that as a proper 429 with explicit retry-after seconds so
+    // the client can show an accurate countdown. Other failures stay 500.
+    const errObj = error as Error & {
+      retryable?: boolean;
+      retryAfter?: number;
+    };
+    if (errObj?.retryable) {
+      return NextResponse.json(
+        {
+          error: error instanceof Error ? error.message : "Internal error",
+          retryAfter: errObj.retryAfter ?? 60,
+        },
+        {
+          status: 429,
+          headers: { "Retry-After": String(errObj.retryAfter ?? 60) },
+        },
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Internal error" },
       { status: 500 },

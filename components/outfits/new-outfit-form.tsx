@@ -88,22 +88,23 @@ export function NewOutfitForm() {
         }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const message =
-          (body as { error?: string; message?: string }).error ??
-          (body as { message?: string }).message ??
-          "Error al generar";
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          message?: string;
+          retryAfter?: number;
+        };
+        const message = body.error ?? body.message ?? "Error al generar";
+        const retryAfter = typeof body.retryAfter === "number" ? body.retryAfter : null;
 
-        // Cooldown on rate limit / quota errors. Use the retry hint from
-        // the server if present, otherwise default to 60s.
+        // Cooldown on rate limit / quota errors. Prefer the server-supplied
+        // retryAfter (precise seconds from Google's error), fall back to
+        // parsing the message, then to 60s default.
         if (
           message.toLowerCase().includes("rate limit") ||
           message.toLowerCase().includes("quota") ||
           message.toLowerCase().includes("esperá")
         ) {
-          const hint = parseRetryAfter(
-            (body as { raw?: string }).raw ?? message,
-          );
+          const hint = retryAfter ?? parseRetryAfter(message);
           const wait = hint ?? DEFAULT_COOLDOWN_SECONDS;
           setCooldownUntil(Date.now() + wait * 1000);
           toast.error(message, { duration: 6000 });
