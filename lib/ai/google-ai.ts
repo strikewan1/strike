@@ -313,11 +313,12 @@ export async function googleAIChat(
     // errors. Keep it tight so total request time stays well under
     // Vercel's maxDuration budget — too many retries would cause the
     // edge to kill the request before all fallbacks get a chance.
-    // 3 attempts = 1 initial + 2 retries. With per-minute rate limits
-    // Google often says "retry in 60s" — we wait that long, retry once,
-    // and if it fails again we move to the next model. Most rate-limit
-    // bursts clear within 1-2 retries of waiting through the window.
-    const maxAttempts = 3;
+    // 2 attempts = 1 initial + 1 retry. For per-minute rate limits
+    // (e.g. Tier 1 = 360 RPM), one retry with the server's `retry in
+    // Xs` backoff is enough; if the second hit also fails we move on
+    // so we don't burn through the entire minute's quota on a single
+    // request the user gave up on.
+    const maxAttempts = 2;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await chatWithModel(messages, options, candidate);

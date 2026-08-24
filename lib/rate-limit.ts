@@ -68,8 +68,10 @@ export function checkRateLimit(
 export const LIMITS = {
   // 10 garment recognitions per hour
   recognize: { capacity: 10, refillPerMs: 10 / (60 * 60 * 1000) },
-  // 1 outfit per 10 seconds (6/min)
-  outfit: { capacity: 6, refillPerMs: 6 / (60 * 1000) },
+  // 3 outfit generations per minute — leaves headroom for Gemini's
+  // 360 RPM Tier-1 limit when multiple retries per request are
+  // accounted for.
+  outfit: { capacity: 3, refillPerMs: 3 / (60 * 1000) },
   // 20 reference analyses per hour
   reference: { capacity: 20, refillPerMs: 20 / (60 * 60 * 1000) },
   // 10 uploads per minute (signed URL requests)
