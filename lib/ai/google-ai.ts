@@ -359,11 +359,22 @@ export async function googleAIChat(
           continue;
         }
 
-        // Out of retries on this model → move to next candidate
+        // Out of retries on this model.
         console.warn(
-          `[GoogleAI] model ${candidate} still failing after ${maxAttempts} attempts, trying next fallback`,
+          `[GoogleAI] model ${candidate} still failing after ${maxAttempts} attempts`,
         );
-        break;
+        // CRITICAL for per-minute rate limits (Tier 1 = 360 RPM):
+        // the quota is per-PROJECT, not per-model. If one model hits 429,
+        // EVERY model will hit it within the same window. So we abort
+        // the whole fallback chain rather than burning more requests
+        // on other models in the chain.
+        if (
+          err instanceof Error &&
+          (err as Error & { retryable?: boolean }).retryable
+        ) {
+          throw err;
+        }
+        break; // Non-retryable error → move to next model
       }
     }
   }
